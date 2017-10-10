@@ -631,5 +631,6 @@ mSystemServiceManager是系统服务管理对象,在前面介绍的run()里面�
 - 服务对象都有自己的异步消息对象，并运行在单独的线程中；
 
 参考文章:  
-<http://blog.csdn.net/qq_23547831/article/details/51105171>
+<http://blog.csdn.net/qq_23547831/article/details/51105171>  
+![这是一个图片](https://raw.githubusercontent.com/lqktz/document/master/res/test.jpg)
 
