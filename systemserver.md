@@ -619,8 +619,7 @@ mSystemServiceManager是系统服务管理对象,在前面介绍的run()里面�
 
 ```
 启动了DropBoxManagerService(系统出问题的调用栈信息),BatteryService(电池相关的服务),UsageStatsService,WebViewUpdateService.  
-最后看一下startOtherServices方法，主要用于启动系统中其他的服务，代码很多，这里就不贴代码了，启动的流程和ActivityManagerService的流程类似，会调用服务的构造方法与onStart方法初始化变量。
-
+最后看一下startOtherServices方法，主要用于启动系统中其他的服务，代码很多，这里就不贴代码了，启动的流程和ActivityManagerService的流程类似，会调用服务的构造方法与onStart方法初始化变量。  
 ##总结
 - SystemServer进程是android中一个很重要的进程由Zygote进程启动,是Zygote的嫡长子,如果该进程崩溃,Zygote会调用方法kill掉自己；
 - SystemServer进程主要用于启动系统中的服务；
