@@ -1,0 +1,35 @@
+ndroid jack build on building server
+
+总结一下：
+
+1.设置以下三个文件， 如果没有则先编译一遍就会生成：
+
+~/.jack
+
+~/.jack-settings  
+
+~/.jack-server/config.properties
+
+修改如下变量, 三个文件中下面两个变量的对应值要一致。（改的原因一台服务器，端口不能重复）：
+
+SERVER_PORT_SERVICE=8072
+
+SERVER_PORT_ADMIN=8073
+
+ 
+
+2.希望大家改端口根据下面的原则：
+
+a)  Windows用ipconfig(linux 用ifconfig ) , 看看自己本机的的ip: x.y.z.w
+
+b)  把w 取出来
+
+SERVER_PORT_SERVICE=8072+w*10 +n  (n < 10 )
+SERVER_PORT_ADMIN=8073 +w*10 +n  (n < 10)
+n = 0,1,2,…9 这部分就是你们个人可用端口。目前n只取其中一个值就好了。
+
+3.如果在编译过程中异常，或者被你ctrl + C , 则需要把jack server kill,
+
+暴力一点就是：pkill java
+Jack server example:
+java -XX:MaxJavaStackTraceDepth=-1 -Djava.io.tmpdir=/tmp -Dfile.encoding=UTF-8 -XX:+TieredCompilation -cp /home/xiaoqi.wu/.jack-server/launcher.jar com.android.jack.launcher.ServerLauncher

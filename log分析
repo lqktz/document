@@ -1,0 +1,25 @@
+打印CPP方法调用堆栈：
+
+一、CPP打印堆栈：
+    #include <utils/CallStack.h>
+    ...
+    android::CallStack stack; 
+    stack.update(1, gettid()); 
+    stack.log("satcklog", ANDROID_LOG_ERROR, "stackdump:");
+    ...
+    }
+    在mk文件中，加入：
+    LOCAL_SHARED_LIBRARIES += libutils
+
+    这样设置打印出来的堆栈信息的Log tag为satcklog，信息格式类似于：
+    01-01 08:02:30.615   372  2158 E satcklog: stackdump:#00 pc 0002671b  /system/lib/libcamera_client.so (_ZN7android16CameraParameters12setVideoSizeEii+70)
+
+二、用addr2line工具进行具体的代码行数定位。
+
+    其中addr2line的使用，以PIXI5-8 TMO举例，在根目录使用如下命令可以定位地址信息对应的代码：
+    ./prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/bin/arm-linux-androideabi-addr2line -C -f -e out/target/product/pixi584g/symbols/system/lib/libcamera_client.so 0002671b 
+    输出为：
+    android::CameraParameters::setVideoSize(int, int)
+    /proc/self/cwd/frameworks/av/camera/CameraParameters.cpp:384 (discriminator 1)
+
+    即可定位具体的代码行数。 

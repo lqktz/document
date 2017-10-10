@@ -1,0 +1,9 @@
+重新挂载system分区:
+adb devices
+adb root
+adb disable-verity
+adb reboot
+
+重启之后还要再次
+adb remount
+将system分区修改为可写
