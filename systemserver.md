@@ -619,8 +619,7 @@ android 4.0新增的一个功能，即设备加密（encrypting the device）,�
 
 ```
 启动了DropBoxManagerService(系统出问题的调用栈信息),BatteryService(电池相关的服务),UsageStatsService,WebViewUpdateService.  
-最后看一下startOtherServices方法，主要用于启动系统中其他的服务，代码很多，这里就不贴代码了，启动的流程和ActivityManagerService的流程类似，会调用服务的构造方法与onStart方法初始化变量。
-
+最后看一下startOtherServices方法，主要用于启动系统中其他的服务，代码很多，这里就不贴代码了，启动的流程和ActivityManagerService的流程类似，会调用服务的构造方法与onStart方法初始化变量。  
 ##总结
 - SystemServer进程是android中一个很重要的进程由Zygote进程启动,是Zygote的嫡长子,如果该进程崩溃,Zygote会调用方法kill掉自己；
 - SystemServer进程主要用于启动系统中的服务；
@@ -632,5 +631,6 @@ android 4.0新增的一个功能，即设备加密（encrypting the device）,�
 - 服务对象都有自己的异步消息对象，并运行在单独的线程中；
 
 参考文章:  
-<http://blog.csdn.net/qq_23547831/article/details/51105171>
+<http://blog.csdn.net/qq_23547831/article/details/51105171>  
+![这是一个图片](https://raw.githubusercontent.com/lqktz/document/master/res/test.jpg)
 
