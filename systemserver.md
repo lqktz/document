@@ -587,7 +587,7 @@ mSystemServiceManager是系统服务管理对象,在前面介绍的run()里面�
         }
 
 ```
-涉及设备安全和加密的,vold(Volume Daemon)用于管理和控制Android平台外部存储设备的后台进程，这些管理和控制，包括SD卡的插拔事件检测、SD卡挂载、卸载、格式化等。这里的设置是当我们的设备处于加密状态,只启动核心服务,通过设置mOnlyCore来进行标示.
+android 4.0新增的一个功能，即设备加密（encrypting the device）,该功能由系统属性vold.decrypt指定.涉及设备安全和加密的,vold(Volume Daemon)用于管理和控制Android平台外部存储设备的后台进程，这些管理和控制，包括SD卡的插拔事件检测、SD卡挂载、卸载、格式化等。这里的设置是当我们的设备处于加密状态,只启动核心服务,通过设置mOnlyCore来进行标示.
 接着分析startCoreServices()函数:  
 ```java
     /**
