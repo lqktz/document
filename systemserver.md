@@ -1,7 +1,7 @@
-#Aandroid SystemServer学习笔记  
-###版本:Android O  
+# Aandroid SystemServer学习笔记  
+### 版本:Android O  
 SystemServer和Zygote是Android java世界的两大支柱,SystemServer是Zygote孵化出来的进程,进程名为system_server,几乎所有的系统服务都在该进程中,eg:AMS,PMS,WMS .etc  
-##1 分析SystemServer代码
+## 1 分析SystemServer代码
 ### 1.1 从SystemServer.java分析
 源码位置:`frameworks\base\services\java\com\android\server\SystemServer.java`,从main()函数开始分析:  
 ```java
@@ -610,7 +610,6 @@ android 4.0新增的一个功能，即设备加密（encrypting the device）,�
         mActivityManagerService.setUsageStatsManager(
                 LocalServices.getService(UsageStatsManagerInternal.class));
         traceEnd();
-
         // Tracks whether the updatable WebView is in a ready state and watches for update installs.
         traceBeginAndSlog("StartWebViewUpdateService");
         mWebViewUpdateService = mSystemServiceManager.startService(WebViewUpdateService.class);
@@ -620,7 +619,7 @@ android 4.0新增的一个功能，即设备加密（encrypting the device）,�
 ```
 启动了DropBoxManagerService(系统出问题的调用栈信息),BatteryService(电池相关的服务),UsageStatsService,WebViewUpdateService.  
 最后看一下startOtherServices方法，主要用于启动系统中其他的服务，代码很多，这里就不贴代码了，启动的流程和ActivityManagerService的流程类似，会调用服务的构造方法与onStart方法初始化变量。  
-##总结
+## 总结
 - SystemServer进程是android中一个很重要的进程由Zygote进程启动,是Zygote的嫡长子,如果该进程崩溃,Zygote会调用方法kill掉自己；
 - SystemServer进程主要用于启动系统中的服务；
 - SystemServer进程启动服务的启动函数为main函数,其实真正干活的还是在run()方法里面；
