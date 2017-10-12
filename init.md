@@ -408,4 +408,46 @@ static int property_set_impl(const char* name, const char* value) {
 ![Android属性的实现框架](http://raw.githubusercontent.com/lqktz/document/master/res/init_property.png)
 #### 1.3 读取init.rc文件  
 init.rc是一个配置文件，内部由Android初始化语言编写（Android Init Language）编写的脚本，它主要包含五种类型语句：
-Action、Commands、Services、Options和Import．完整的init文件比较长，这里重点分析Zygote的启动，后续要分析该进程．
+Action、Commands、Services、Options和Import．完整的init文件比较长，这里重点分析Zygote的启动，后续要分析该进程． 
+下面简单的用init.rc中的例子对Action、Commands、Services、Options和Import进行说明。
+```
+# Copyright (C) 2012 The Android Open Source Project
+#
+# IMPORTANT: Do not create world writable files or directories.
+# This is a common source of Android security bugs.
+#
+#导入相关的初始化配置文件
+import /init.environ.rc
+import /init.usb.rc
+#平台相关的如：高通、MTK
+import /init.${ro.hardware}.rc
+import /init.usb.configfs.rc
+#导入初始化zygote进程的配置文件
+import /init.${ro.zygote}.rc
+#on 对应action，是启动，early-init市条件 write、mkdir、start是命令（commands）
+on early-init
+    # Set init and its forked children's oom_adj.
+    write /proc/1/oom_score_adj -1000
+
+    # Disable sysrq from keyboard
+    write /proc/sys/kernel/sysrq 0
+
+    # Set the security context of /adb_keys if present.
+    restorecon /adb_keys
+
+    # Shouldn't be necessary, but sdcard won't start without it. http://b/22568628.
+    mkdir /mnt 0775 root system
+
+    # Set the security context of /postinstall if present.
+    restorecon /postinstall
+
+    start ueventd
+#每一个service对应一个新的进程，ueventd进程名，/sbin/ueventd进程的位置（程序执行的路径）也就是options，后面还可以跟参数，
+#class、critical、seclabel都是命令
+service ueventd /sbin/ueventd
+    class core
+    critical
+    seclabel u:r:ueventd:s0
+```
+对于这些commands在Android源码中有文档说明，在`aosp/system/core/init/readme.txt`，每个命令都有对于的代码实现，接下来就会分析到。  
+我们
