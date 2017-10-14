@@ -801,11 +801,13 @@ void ImportParser::EndFile(const std::string& filename) {
 init.zygote32_64.rc  init.zygote32.rc     init.zygote64_32.rc  init.zygote64.rc
 ```
 这里以`init.zygote32.rc`为例:  
-```
+```shell
+#zygote是进程
 service zygote /system/bin/app_process -Xzygote /system/bin --zygote --start-system-server
     #启动组名，同样名字的一起启动
     class main
     socket zygote stream 660 root system
+    #onrestart表示zygote重启时需要执行的命令
     onrestart write /sys/android_power/request_state wake
     onrestart write /sys/power/state on
     onrestart restart audioserver
@@ -890,8 +892,8 @@ static int do_class_start(const std::vector<std::string>& args) {
 }
 ```
 接着看StartIfNotDisabled(),位置`aosp/system/core/init/service.cpp`:   
-```C++
-bool Service::StartIfNotDisabled() {                                                                                                                                     
+```cpp
+bool Service::StartIfNotDisabled() {
     if (!(flags_ & SVC_DISABLED)) {
         return Start();
     } else {
@@ -901,7 +903,7 @@ bool Service::StartIfNotDisabled() {
 }
 ```
 还调了Start()，接着看吧:  
-```C++
+``cpp
 bool Service::Start() {
    ......
    //判断需要启动的Service的对应的执行文件是否存在，不存在则不启动该Service
@@ -979,9 +981,135 @@ int main(int argc, char* const argv[])
     }
 }
 ```
-最终使用runtime.start进入了ZygoteInit.java的main()方法中，开启了Zygote进程启动之旅.
+最终使用runtime.start执行"com.android.internal.os.ZygoteInit",接着分析runtime.start的具体实现.runtime是AppRuntime类,可是AppRuntime
+类没有start方法,于是找到AppRuntime的父类AndroidRuntime的start方法:  
+```cpp
+void AndroidRuntime::start(const char* className, const Vector<String8>& options, bool zygote)
+{
+    ALOGD(">>>>>> START %s uid %d <<<<<<\n",
+            className != NULL ? className : "(unknown)", getuid());
 
-**参考blog**  
+
+    static const String8 startSystemServer("start-system-server");
+
+    /*
+     * 'startSystemServer == true' means runtime is obsolete and not run from
+     * init.rc anymore, so we print out the boot start event here.
+     */
+    for (size_t i = 0; i < options.size(); ++i) {
+        if (options[i] == startSystemServer) {
+           /* track our progress through the boot sequence */
+           const int LOG_BOOT_PROGRESS_START = 3000;
+           LOG_EVENT_LONG(LOG_BOOT_PROGRESS_START,  ns2ms(systemTime(SYSTEM_TIME_MONOTONIC)));
+        }
+    }
+
+    const char* rootDir = getenv("ANDROID_ROOT");
+    if (rootDir == NULL) {
+        rootDir = "/system";
+        if (!hasDir("/system")) {
+            LOG_FATAL("No root directory specified, and /android does not exist.");
+            return;
+        }
+        setenv("ANDROID_ROOT", rootDir, 1);
+    }
+
+    //const char* kernelHack = getenv("LD_ASSUME_KERNEL");
+    //ALOGD("Found LD_ASSUME_KERNEL='%s'\n", kernelHack);
+
+    /* start the virtual machine */
+    JniInvocation jni_invocation;
+    jni_invocation.Init(NULL);
+    JNIEnv* env;
+    //启动虚拟机
+    if (startVm(&mJavaVM, &env, zygote) != 0) {
+        return;
+    }
+    onVmCreated(env);
+    //注册JNI方法到虚拟机
+    /*
+     * Register android functions.
+     */
+    if (startReg(env) < 0) {
+        ALOGE("Unable to register all android natives\n");
+        return;
+    }
+
+    /*
+     * We want to call main() with a String array with arguments in it.
+     * At present we have two arguments, the class name and an option string.
+     * Create an array to hold them.
+     */
+    jclass stringClass;
+    jobjectArray strArray;
+    jstring classNameStr;
+
+    stringClass = env->FindClass("java/lang/String");
+    assert(stringClass != NULL);
+    strArray = env->NewObjectArray(options.size() + 1, stringClass, NULL);
+    assert(strArray != NULL);
+    classNameStr = env->NewStringUTF(className);
+    assert(classNameStr != NULL);
+    env->SetObjectArrayElement(strArray, 0, classNameStr);
+
+    for (size_t i = 0; i < options.size(); ++i) {
+        jstring optionsStr = env->NewStringUTF(options.itemAt(i).string());
+        assert(optionsStr != NULL);
+        env->SetObjectArrayElement(strArray, i + 1, optionsStr);
+    }
+
+    /*
+     * Start VM.  This thread becomes the main thread of the VM, and will
+     * not return until the VM exits.
+     */
+    char* slashClassName = toSlashClassName(className);
+    jclass startClass = env->FindClass(slashClassName);
+    if (startClass == NULL) {
+        ALOGE("JavaVM unable to locate class '%s'\n", slashClassName);
+        /* keep going */
+    } else {
+        jmethodID startMeth = env->GetStaticMethodID(startClass, "main",
+            "([Ljava/lang/String;)V");
+        if (startMeth == NULL) {
+            ALOGE("JavaVM unable to find main() in '%s'\n", className);
+            /* keep going */
+        } else {//启动com.android.internal.os.ZygoteInit
+            env->CallStaticVoidMethod(startClass, startMeth, strArray);
+
+#if 0
+            if (env->ExceptionCheck())
+                threadExitUncaughtException(env);
+#endif
+        }
+    }
+    free(slashClassName);
+
+    ALOGD("Shutting down VM\n");
+    if (mJavaVM->DetachCurrentThread() != JNI_OK)
+        ALOGW("Warning: unable to detach main thread\n");
+    mVMShutdown = true;
+    if (mJavaVM->DestroyJavaVM() != 0)
+        ALOGW("Warning: VM did not shut down cleanly\n");
+}
+```
+该方法做了一下几件事:  
+
+- 启动java虚拟机   
+- 将JNI方法注册到java虚拟机  
+- 进入到ZygoteInit.java的main()方法  
+
+进入到ZygoteInit.java也就是进入到java层,在分析Zygote的启动过程中再接着分析,这里告一段落.需要注意的是Zygote进程的启动是在解析init.Zygote32.rc开始的,
+到这里还没有完成,只是到这,C++层的执行完了.在另一篇介绍Zygote启动的文章中,再接着ZygoteInit.java的main()分析,从java层分析.在C++层只是讲Zygote进程创建,
+但是什么活也没干,干活是在java层面,因此文章将zygote进程的分析从此处分成两个部分,同事也是为了让文章内容是以init进程分析为主.  
+
+###总结  
+本文主要分析了,init进程的启动,主要分析了一下内容:   
+
+- init进程启动属性服务的过程,分析了属性服务建立过程  
+- init进程对rc配置文件的解析,分为对import,action,service,commands的的解析  
+- 以zygote进程为例子,分析了作为service被解析之后的执行过程,一直到调用到java层的过程  
+
+###参考blog  
 <http://blog.csdn.net/fu_kevin0606/article/details/53339001>  
 <http://blog.csdn.net/innost/article/details/47204675>  
 <http://blog.csdn.net/luoshengyang/article/details/38102011>  
