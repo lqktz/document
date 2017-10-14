@@ -6,14 +6,15 @@ aosp/system/core/init/init.cpp
 aosp/system/core/rootdir/init.rc  
 aosp/system/core/init/property_service.cpp  
 ***
-### 0 init进程的主要职责
+### 0 init进程的主要职责  
 - init如何创建zygote。  
 - init的属性服务是如何工作的。  
 ### 1 init.cpp分析  
 #### 1.1从init进程的入口函数main()开始分析  
-```C++
-
-nt main(int argc, char** argv) {
+init进程的main()函数会执行两次,分别是第一阶段和第二阶段,main函数会进入两次,只是两次进去执行的代码不一样  
+```cpp
+int main(int argc, char** argv) {
+    //由于ueventd watchdogd是公用代码，所以启动的时候根据文件名来判断是哪个进程
     //和ueventd守护进程相关
     if (!strcmp(basename(argv[0]), "ueventd")) {
         return ueventd_main(argc, argv);
@@ -22,14 +23,14 @@ nt main(int argc, char** argv) {
     if (!strcmp(basename(argv[0]), "watchdogd")) {
         return watchdogd_main(argc, argv);
     }
-    
+
     // Clear the umask.
     umask(0);
-
+    //添加环境变量 
     add_environment("PATH", _PATH_DEFPATH);
 
     bool is_first_stage = (argc == 1) || (strcmp(argv[1], "--second-stage") != 0);
-    //创建文件夹，挂载设备
+    //创建文件夹，挂载设备,和linux相关
     // Get the basic filesystem setup we need put together in the initramdisk
     // on / and then we'll let the rc file figure out the rest.
     if (is_first_stage) {
@@ -48,13 +49,16 @@ nt main(int argc, char** argv) {
     // to the outside world.
     //重定向标准输入/输出/错误输出到/dev/_null_　
     open_devnull_stdio();
+    //对klog进行初始化，设置klog level为NOTICE，所以可以将NOTICE级别的log输出，而INFO级别的log就打印不出来
+    //<http://blog.csdn.net/fu_kevin0606/article/details/53339001>
     //初始化klog
     klog_init();
+    //设置klog的级别为NOTICE
     klog_set_level(KLOG_NOTICE_LEVEL);
 
     NOTICE("init %s started!\n", is_first_stage ? "first stage" : "second stage");
 
-    if (!is_first_stage) {
+    if (!is_first_stage) {//第二阶段执行该代码
         // Indicate that booting is in progress to background fw loaders, etc.
         close(open("/dev/.booting", O_WRONLY | O_CREAT | O_CLOEXEC, 0000));
         //属性服务初始化，接下来会分析
@@ -81,7 +85,9 @@ nt main(int argc, char** argv) {
             security_failure();
         }
         char* path = argv[0];
+        //设置第二阶段的参数
         char* args[] = { path, const_cast<char*>("--second-stage"), nullptr };
+        //当init是第一阶段,要通过execv重启init进程,进入init的第二阶段
         if (execv(path, args) == -1) {
             ERROR("execv(\"%s\") failed: %s\n", path, strerror(errno));
             security_failure();
@@ -183,7 +189,7 @@ nt main(int argc, char** argv) {
 ```
 main函数里涉及不少东西,只是把当前知道的注释了一下,以后补充,这里关注一下,属性服务的启动,以及对init.rc文件的解析.  
 #### 1.2 属性服务  
-从上面的init.cpp的main函数中涉及属性服务的代码有  
+Android中有很多属性,是通过属性服务(property service)来管理它们的.接着来分析属性服务的代码,从上面的init.cpp的main函数中涉及属性服务的代码有  
 ```C++
     property_init();
     start_property_service();
@@ -974,3 +980,11 @@ int main(int argc, char* const argv[])
 }
 ```
 最终使用runtime.start进入了ZygoteInit.java的main()方法中，开启了Zygote进程启动之旅.
+
+**参考blog**  
+<http://blog.csdn.net/fu_kevin0606/article/details/53339001>  
+<http://blog.csdn.net/innost/article/details/47204675>  
+<http://blog.csdn.net/luoshengyang/article/details/38102011>  
+<http://blog.csdn.net/itachi85/article/details/54783506>  
+<http://blog.csdn.net/kc58236582/article/details/52247547>  
+<http://blog.csdn.net/fu_kevin0606/article/details/53320515>  
