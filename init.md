@@ -969,9 +969,15 @@ int main(int argc, char* const argv[])
     argc--;
     argv++;
     ......
+    if (!niceName.isEmpty()) {
+        runtime.setArgv0(niceName.string());
+        //设置进程名为zygote
+        set_process_name(niceName.string());
+    }
+
     if (zygote) {//经过一系列的初始化和参数判断，会调用到这里
         runtime.start("com.android.internal.os.ZygoteInit", args, zygote);
-    } else if (className) {
+    } else if (className) {//与上面的启动方式对比,两者在native层实现相同,区别在java层,ZygoteInit比RuntimeInit多做不少事情
         runtime.start("com.android.internal.os.RuntimeInit", args, zygote);
     } else {
         fprintf(stderr, "Error: no class name or --zygote supplied.\n");
