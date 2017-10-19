@@ -3,6 +3,9 @@ zygote进程是由init进程启动的,在android中所有应用进程以及系�
 当zygote完成启动立启动system_server,这是在zygote.rc中的参数`--start-system-serve`决定的.  
 在`aosp/frameworks/base/cmds/app_process/app_main.cpp`的main函数里`runtime.start("com.android.internal.os.ZygoteInit", args, zygote);`,
 进入java层的`aosp/frameworks/base/core/java/com/android/internal/os/ZygoteInit.java`的main函数  
+在进行分析之前,先分享一张图片,图片来自:
+
+
 ```cpp
     public static void main(String argv[]) {
         /// M: GMO Zygote64 on demand @{
@@ -11,6 +14,7 @@ zygote进程是由init进程启动的,在android中所有应用进程以及系�
         if (DEBUG_ZYGOTE_ON_DEMAND) {
             Log.d(TAG, "ZygoteOnDemand: Zygote ready = " + sZygoteReady);
         }
+        //socketName用于区分不预加载类操作,zygote为一类,其他为另一类
         String socketName = "zygote";
         /// M: GMO Zygote64 on demand @}
 
@@ -36,6 +40,7 @@ zygote进程是由init进程启动的,在android中所有应用进程以及系�
                 } else if (argv[i].startsWith(ABI_LIST_ARG)) {
                     abiList = argv[i].substring(ABI_LIST_ARG.length());
                 } else if (argv[i].startsWith(SOCKET_NAME_ARG)) {
+                    //可能传的参数有修改socketName的值
                     socketName = argv[i].substring(SOCKET_NAME_ARG.length());
                 } else {
                     throw new RuntimeException("Unknown command line argument: " + argv[i]);
@@ -156,6 +161,7 @@ zygote main()里的主要工作:
     private static void registerZygoteSocket(String socketName) {
         if (sServerSocket == null) {
             int fileDesc;
+            //这里的socketName默认是zygote,也可以通过传参数修改,在main函数里有先关的说明
             final String fullSocketName = ANDROID_SOCKET_PREFIX + socketName;
             try {
                 //这就是在获取zygote在native端在/dev/socket下创建的zygote这个socket文件的位置
@@ -176,7 +182,258 @@ zygote main()里的主要工作:
         }
     }
 ```
+***
+分析加载类和资源,在zygote.java的main函数里:  
+```
+        preloadByName(socketName);
+```
+preloadByName:  
+```
+    /// M: GMO Zygote64 on demand @{
+    /// M: Added for Zygote preload control @{
+    static void preloadByName(String name) {
+        if (sZygoteOnDemandEnabled) {//sZygoteOnDemandEnabled是MTK平台的参数,可以忽略不管,一般都是1
+            if ("zygote".equals(name)) {//是zygote进程
+                preload();
+            } else {//如果socketName的值不是默认的zygote,由于传了参数,去修改它走走这个分支
+                preloadSecondary();
+            }
+        } else {
+            preload();
+        }
+    }
+```
+preload():  
+```
+    static void preload() {
+        Log.d(TAG, "begin preload");
+        Trace.traceBegin(Trace.TRACE_TAG_DALVIK, "BeginIcuCachePinning");
+        //才疏学浅...
+        beginIcuCachePinning();
+        Trace.traceEnd(Trace.TRACE_TAG_DALVIK);
+        Trace.traceBegin(Trace.TRACE_TAG_DALVIK, "PreloadClasses");
+        //加载preloaded-classes资源,文件位置:frameworks/base/preloaded-classes
+        preloadClasses();
+        Trace.traceEnd(Trace.TRACE_TAG_DALVIK);
+        Trace.traceBegin(Trace.TRACE_TAG_DALVIK, "PreloadResources");
+        //加载共享资源
+        preloadResources();
+        Trace.traceEnd(Trace.TRACE_TAG_DALVIK);
+        Trace.traceBegin(Trace.TRACE_TAG_DALVIK, "PreloadOpenGL");
+        //加载OpenGL()资源
+        preloadOpenGL();
+        Trace.traceEnd(Trace.TRACE_TAG_DALVIK);
+        preloadSharedLibraries();
+        preloadTextResources();
+        // Ask the WebViewFactory to do any initialization that must run in the zygote process,
+        // for memory sharing purposes.
+        WebViewFactory.prepareWebViewInZygote();
+        endIcuCachePinning();
+        warmUpJcaProviders();
+        Log.d(TAG, "end preload");
+    }
+```
+preload方法会加载三个部分，preloadClasses，preloadResources和preloadOpenGL。简单分析preloadClasses,其他两个不熟悉...  
+**加载preloaded-classes资源:**  
+```cpp
+    /**
+     * Performs Zygote process initialization. Loads and initializes
+     * commonly used classes.
+     *
+     * Most classes only cause a few hundred bytes to be allocated, but
+     * a few will allocate a dozen Kbytes (in one case, 500+K).
+     */
+    private static void preloadClasses() {
+        final VMRuntime runtime = VMRuntime.getRuntime();
 
+        InputStream is;
+        try {
+            //预加载类的信息存储在PRELOADED_CLASSES文件中
+            //打开PRELOADED_CLASSES文件
+            is = new FileInputStream(PRELOADED_CLASSES);
+        } catch (FileNotFoundException e) {
+            Log.e(TAG, "Couldn't find " + PRELOADED_CLASSES + ".");
+            return;
+        }
+
+        Log.i(TAG, "Preloading classes...");
+        long startTime = SystemClock.uptimeMillis();
+
+        // Drop root perms while running static initializers.
+        final int reuid = Os.getuid();
+        final int regid = Os.getgid();
+
+        // We need to drop root perms only if we're already root. In the case of "wrapped"
+        // processes (see WrapperInit), this function is called from an unprivileged uid
+        // and gid.
+        boolean droppedPriviliges = false;
+        if (reuid == ROOT_UID && regid == ROOT_GID) {
+            try {
+                Os.setregid(ROOT_GID, UNPRIVILEGED_GID);
+                Os.setreuid(ROOT_UID, UNPRIVILEGED_UID);
+            } catch (ErrnoException ex) {
+                throw new RuntimeException("Failed to drop root", ex);
+            }
+
+            droppedPriviliges = true;
+        }
+
+        // Alter the target heap utilization.  With explicit GCs this
+        // is not likely to have any effect.
+        float defaultUtilization = runtime.getTargetHeapUtilization();
+        runtime.setTargetHeapUtilization(0.8f);
+
+        /// M: Added for BOOTPROF
+        int count = 0;
+        try {
+            BufferedReader br
+                = new BufferedReader(new InputStreamReader(is), 256);
+
+            String line;
+            while ((line = br.readLine()) != null) {
+                // Skip comments and blank lines.\
+                //是按行解析PRELOADED_CLASSES
+                line = line.trim();
+                if (line.startsWith("#") || line.equals("")) {//跳过#开头或者空行
+                    continue;
+                }
+
+                Trace.traceBegin(Trace.TRACE_TAG_DALVIK, "PreloadClass " + line);
+                try {
+                    if (false) {
+                        Log.v(TAG, "Preloading " + line + "...");
+                    }
+                    // Load and explicitly initialize the given class. Use
+                    // Class.forName(String, boolean, ClassLoader) to avoid repeated stack lookups
+                    // (to derive the caller's class-loader). Use true to force initialization, and
+                    // null for the boot classpath class-loader (could as well cache the
+                    // class-loader of this class in a variable).
+                    //通过反射加载类
+                    Class.forName(line, true, null);
+                    count++;
+                } catch (ClassNotFoundException e) {
+                    Log.w(TAG, "Class not found for preloading: " + line);
+                } catch (UnsatisfiedLinkError e) {
+                    Log.w(TAG, "Problem preloading " + line + ": " + e);
+                } catch (Throwable t) {
+                    Log.e(TAG, "Error preloading " + line + ".", t);
+                    if (t instanceof Error) {
+                        throw (Error) t;
+                    }
+                    if (t instanceof RuntimeException) {
+                        throw (RuntimeException) t;
+                    }
+                    throw new RuntimeException(t);
+                }
+                Trace.traceEnd(Trace.TRACE_TAG_DALVIK);
+            }
+
+            Log.i(TAG, "...preloaded " + count + " classes in "
+                    + (SystemClock.uptimeMillis()-startTime) + "ms.");
+        } catch (IOException e) {
+            Log.e(TAG, "Error reading " + PRELOADED_CLASSES + ".", e);
+        } finally {
+            IoUtils.closeQuietly(is);
+            // Restore default.
+            runtime.setTargetHeapUtilization(defaultUtilization);
+
+            // Fill in dex caches with classes, fields, and methods brought in by preloading.
+            Trace.traceBegin(Trace.TRACE_TAG_DALVIK, "PreloadDexCaches");
+            runtime.preloadDexCaches();
+            Trace.traceEnd(Trace.TRACE_TAG_DALVIK);
+
+            // Bring back root. We'll need it later if we're in the zygote.
+            if (droppedPriviliges) {
+                try {
+                    Os.setreuid(ROOT_UID, ROOT_UID);
+                    Os.setregid(ROOT_GID, ROOT_GID);
+                } catch (ErrnoException ex) {
+                    throw new RuntimeException("Failed to restore root", ex);
+                }
+            }
+            /// M: Added for BOOTPROF @{
+            addBootEvent("Zygote:Preload " + count + " classes in " +
+            (SystemClock.uptimeMillis() - startTime) + "ms");
+            /// @}
+        }
+    }
+```
+PRELOADED_CLASSES文件在源码中位于frameworks/base/preloaded-classes,手机中位于system/etc/preloaded-classes
+函数的作用就是按行加载preloaded-classes里面的类,preloaded-classes有4000多行,还是很耗时间的,在android启动中
+这也是一个耗时操作.关于preloaded-classes的产生以及深入学习,以后再做总结.
+**加载共享资源:**  
+```cpp
+    /**
+     * Load in commonly used resources, so they can be shared across
+     * processes.
+     *
+     * These tend to be a few Kbytes, but are frequently in the 20-40K
+     * range, and occasionally even larger.
+     */
+    private static void preloadResources() {
+        final VMRuntime runtime = VMRuntime.getRuntime();
+
+        try {
+            mResources = Resources.getSystem();
+            mResources.startPreloading();
+            if (PRELOAD_RESOURCES) {
+                Log.i(TAG, "Preloading resources...");
+
+                long startTime = SystemClock.uptimeMillis();
+                TypedArray ar = mResources.obtainTypedArray(
+                        com.android.internal.R.array.preloaded_drawables);
+                int N = preloadDrawables(ar);
+                ar.recycle();
+                Log.i(TAG, "...preloaded " + N + " resources in "
+                        + (SystemClock.uptimeMillis()-startTime) + "ms.");
+                addBootEvent("Zygote:Preload " + N + " obtain resources in " +
+                                (SystemClock.uptimeMillis() - startTime) + "ms");
+
+                startTime = SystemClock.uptimeMillis();
+                ar = mResources.obtainTypedArray(
+                        com.android.internal.R.array.preloaded_color_state_lists);
+                N = preloadColorStateLists(ar);
+                ar.recycle();
+                Log.i(TAG, "...preloaded " + N + " resources in "
+                        + (SystemClock.uptimeMillis()-startTime) + "ms.");
+
+                if (mResources.getBoolean(
+                        com.android.internal.R.bool.config_freeformWindowManagement)) {
+                    startTime = SystemClock.uptimeMillis();
+                    ar = mResources.obtainTypedArray(
+                            com.android.internal.R.array.preloaded_freeform_multi_window_drawables);
+                    N = preloadDrawables(ar);
+                    ar.recycle();
+                    Log.i(TAG, "...preloaded " + N + " resource in "
+                            + (SystemClock.uptimeMillis() - startTime) + "ms.");
+                }
+
+                /// M: Added for BOOTPROF @{
+                addBootEvent("Zygote:Preload " + N + " resources in " +
+                (SystemClock.uptimeMillis() - startTime) + "ms");
+                /// @}
+            }
+            mResources.finishPreloading();
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Failure preloading resources", e);
+        }
+    }
+```
+**加载OpenGL()资源:**  
+```cpp
+    private static void preloadOpenGL() {
+        /// N: Added for Boot time profiling @{
+        Log.i(TAG, "Preloading OpenGL...");
+        /// @}
+        if (!SystemProperties.getBoolean(PROPERTY_DISABLE_OPENGL_PRELOADING, false)) {
+            EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY);
+        }
+        /// N: Added for Boot time profiling @{
+        Log.i(TAG, "Preloading OpenGL --- End");
+        /// @}
+    }
+```
+总之,这是preload是一个启动耗时操作.那么启动时预加载这些类,是为了在开机后使用到这些类的时候速度更快,更加流畅.  
 ***
 启动systemserver进程的操作不是直接执行systemserver main函数,而是通过抛出异常,抓取异常的方式实现的,这样做的好处就是:
 清理应用程序栈中ZygoteInit.main以上的函数栈帧，以实现当相应的main函数退出时，能直接退出整个应用程序。
