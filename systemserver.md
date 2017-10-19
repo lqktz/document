@@ -105,6 +105,7 @@ new出一个SystemServer类,执行其run()方法.
 
             // Some devices rely on runtime fingerprint generation, so make sure
             // we've defined it before booting further.
+            //指纹初始化属性值
             Build.ensureFingerprintProperty();
 
             // Within the system server, it is an error to access Environment paths without
@@ -254,6 +255,7 @@ new出一个SystemServer类,执行其run()方法.
 
             // Some devices rely on runtime fingerprint generation, so make sure
             // we've defined it before booting further.
+            //指纹
             Build.ensureFingerprintProperty();
 
             // Within the system server, it is an error to access Environment paths without
@@ -268,6 +270,7 @@ new出一个SystemServer类,执行其run()方法.
             BinderInternal.disableBackgroundScheduling(true);
 
             // Increase the number of binder threads in system_server
+            //设置binder最大线程数 sMaxBinderThreads=31
             BinderInternal.setMaxThreads(sMaxBinderThreads);
 ```
 这段代码的主要作用是设置虚拟机(VMRuntime)运行内存,相关的操作,(没有细致的研究过).  
@@ -289,7 +292,8 @@ new出一个SystemServer类,执行其run()方法.
             // This call may not return.
             performPendingShutdown();
 ```
-performPendingShutdown()函数代码如下:  
+***
+这里给出performPendingShutdown()函数代码如下:  
 ```java
     private void performPendingShutdown() {
         final String shutdownAction = SystemProperties.get(
@@ -334,6 +338,8 @@ performPendingShutdown()函数代码如下:
 
 ```
 依据注释,和代码名,最近一次关机操作(启动SystemServer是在开机过程中),是非正常状态,该代码将shutdown操作悬挂.(想要明白此处还要明白android的关机流程,还要努力!!!).
+***
+回到run()方法接着分析;  
 ```java
             // Initialize the system context.
             createSystemContext();
@@ -358,7 +364,10 @@ performPendingShutdown()函数代码如下:
             // Prepare the thread pool for init tasks that can be parallelized
             SystemServerInitThreadPool.get();
 ```
-启动AMS\PMS\WMS等等这些系统级的服务前,要把管理他们的服务SystemServiceManager启动起来吧,老铁,这没有问题吧~~~`LocalServices.addService(SystemServiceManager.class, mSystemServiceManager);`将SystemServiceManager对象保存SystemServer进程中的一个数据结构中.`SystemServerInitThreadPool.get();`初始化线程池,为了初始化任务能够并行处理.这些启动系统级服务的准备工作都做好了,是不是该启动服务了:
+启动AMS\PMS\WMS等等这些系统级的服务前,要把管理他们的服务SystemServiceManager启动起来吧,老铁,这没有问题吧~~~
+`LocalServices.addService(SystemServiceManager.class, mSystemServiceManager);`将SystemServiceManager对象保存
+SystemServer进程中的一个数据结构中.`SystemServerInitThreadPool.get();`初始化线程池,为了初始化任务能够并行处理.
+这些启动系统级服务的准备工作都做好了,是不是该启动服务了:
 ```java
         // Start services.
         try {
@@ -375,7 +384,11 @@ performPendingShutdown()函数代码如下:
             traceEnd();
         }
 ```
-终于到启动这些重量级的系统级的服务了,通过`startBootstrapServices()`主要用于启动系统Boot级服务 ,`startCoreServices()`主要用于启动系统核心的服务,`startOtherServices()`主要用于启动一些非紧要或者是非需要及时启动的服务.启动完成之后使用SystemServerInitThreadPool.shutdown()讲线程池关闭.接着我们注意分析`startBootstrapServices()`,`startCoreServices()`,`startOtherServices()`这三个函数.  
+终于到启动这些重量级的系统级服务了,通过`startBootstrapServices()`主要用于启动系统Boot级服务 ,
+`startCoreServices()`主要用于启动系统核心的服务,`startOtherServices()`主要用于启动一些非紧要
+或者是非需要及时启动的服务.启动完成之后使用SystemServerInitThreadPool.shutdown()讲线程池关闭.
+接着我们注意分析`startBootstrapServices()`,`startCoreServices()`,`startOtherServices()`这三个函数.  
+
 首先看`startBootstrapServices()`:
 ```java
     /**
@@ -387,6 +400,7 @@ performPendingShutdown()函数代码如下:
      */
     private void startBootstrapServices() {
        ......
+        //Installer提供安装、卸载App等服务
        Installer installer = mSystemServiceManager.startService(Installer.class);
         traceEnd();
        ......
@@ -397,6 +411,7 @@ performPendingShutdown()函数代码如下:
         traceEnd();
 
         // Activity manager runs the show.
+        //大名鼎鼎的ActivityManagerService在这里启动,提供Activity等组件的管理的服务
         traceBeginAndSlog("StartActivityManager");
         mActivityManagerService = mSystemServiceManager.startService(
                 ActivityManagerService.Lifecycle.class).getService();
@@ -408,6 +423,7 @@ performPendingShutdown()函数代码如下:
         // Native daemons may be watching for it to be registered so it must be ready
         // to handle incoming binder calls immediately (including being able to verify
         // the permissions for those calls).
+        //电源管理的服务
         traceBeginAndSlog("StartPowerManager");
         mPowerManagerService = mSystemServiceManager.startService(PowerManagerService.class);
         traceEnd();
@@ -432,12 +448,14 @@ performPendingShutdown()函数代码如下:
 
         // Manages LEDs and display backlight so we need it to bring up the display.
         traceBeginAndSlog("StartLightsService");
+        //LED管理和背光显示的服务
         mSystemServiceManager.startService(LightsService.class);
         traceEnd();
 
         // Display manager is needed to provide display metrics before package manager
         // starts up.
         traceBeginAndSlog("StartDisplayManager");
+        //提供显示的生命周期管理，根据物理显示设备当前的情况决定显示配置，在状态改变时发送通知给系统和应用等服务
         mDisplayManagerService = mSystemServiceManager.startService(DisplayManagerService.class);
         traceEnd();
 
@@ -457,6 +475,7 @@ performPendingShutdown()函数代码如下:
         }
 
         // Start the package manager.
+        //启动PackageManagerService,该服务用于管理所有的.apk
         if (!mRuntimeRestart) {
             MetricsLogger.histogram(null, "boot_package_manager_init_start",
                     (int) SystemClock.elapsedRealtime());
@@ -490,6 +509,7 @@ performPendingShutdown()函数代码如下:
         }
 
         traceBeginAndSlog("StartUserManagerService");
+        //提供用户相关服务
         mSystemServiceManager.startService(UserManagerService.LifeCycle.class);
         traceEnd();
 
@@ -527,6 +547,7 @@ performPendingShutdown()函数代码如下:
         // service, and permissions service, therefore we start it after them.
         // Start sensor service in a separate thread. Completion should be checked
         // before using it.
+        //通过startSensorService()本地方法启动Sensor服务
         mSensorServiceStart = SystemServerInitThreadPool.get().submit(() -> {
             BootTimingsTraceLog traceLog = new BootTimingsTraceLog(
                     SYSTEM_SERVER_TIMING_ASYNC_TAG, Trace.TRACE_TAG_SYSTEM_SERVER);
@@ -540,8 +561,11 @@ performPendingShutdown()函数代码如下:
 ```java
 Installer installer = mSystemServiceManager.startService(Installer.class);
 ```
-mSystemServiceManager是系统服务管理对象,在前面介绍的run()里面已经实例化了.这里简单介绍一下Installer类，该类是系统安装apk时的一个服务类，继承SystemService（系统服务的一个抽象接口），我们需要在启动完成Installer服务之后才能启动其他的系统服务.接着可以看到ActivityManagerService,PowerManagerService,RecoverySystemService,LightsService,DisplayManagerService,UserManagerService这些服务都是使用mSystemServiceManager.startService()方法将服务启动起来.  
-发现PackageManagerService服务和其他的有点不一样,他是直接调用了静态方法main()方法实现了
+mSystemServiceManager是系统服务管理对象,在前面介绍的run()里面已经实例化了.这里简单介绍一下Installer类，
+该类是系统安装apk时的一个服务类，继承SystemService（系统服务的一个抽象接口），我们需要在启动完成Installer
+服务之后才能启动其他的系统服务.接着可以看到ActivityManagerService,PowerManagerService,RecoverySystemService,
+LightsService,DisplayManagerService,UserManagerService这些服务都是使用mSystemServiceManager.startService()方法将服务启动起来.  
+发现PackageManagerService服务和其他的有点不一样,他是直接调用了静态方法main()方法实现了:  
 ```java
         // Start the package manager.
         if (!mRuntimeRestart) {
@@ -559,7 +583,7 @@ mSystemServiceManager是系统服务管理对象,在前面介绍的run()里面�
                     (int) SystemClock.elapsedRealtime());
         }
 ```
-分析main()函数:
+分析PackageManagerService.main()函数:  
 ```java
     public static PackageManagerService main(Context context, Installer installer,
             boolean factoryTest, boolean onlyCore) {
@@ -574,7 +598,9 @@ mSystemServiceManager是系统服务管理对象,在前面介绍的run()里面�
     }
 ```
 这里是直接newPackageManagerService,然后调用ServiceManager.addService,通过了binder(以后再仔细研究).
-这里有一段涉及vold服务的:
+对于这里涉及到的服务,会单独抽出来学习总结,这里简单介绍一下.
+
+这里有一段涉及vold服务的:  
 ```java
         // Only run "core" apps if we're encrypting the device.
         String cryptState = SystemProperties.get("vold.decrypt");
@@ -585,9 +611,12 @@ mSystemServiceManager是系统服务管理对象,在前面介绍的run()里面�
             Slog.w(TAG, "Device encrypted - only parsing core apps");
             mOnlyCore = true;
         }
-
 ```
-android 4.0新增的一个功能，即设备加密（encrypting the device）,该功能由系统属性vold.decrypt指定.涉及设备安全和加密的,vold(Volume Daemon)用于管理和控制Android平台外部存储设备的后台进程，这些管理和控制，包括SD卡的插拔事件检测、SD卡挂载、卸载、格式化等。这里的设置是当我们的设备处于加密状态,只启动核心服务,通过设置mOnlyCore来进行标示.
+android 4.0新增的一个功能，即设备加密（encrypting the device）,该功能由系统属性vold.decrypt指定.
+涉及设备安全和加密的,vold(Volume Daemon)用于管理和控制Android平台外部存储设备的后台进程，这些管
+理和控制，包括SD卡的插拔事件检测、SD卡挂载、卸载、格式化等。这里的设置是当我们的设备处于加密状态,
+只启动核心服务,通过设置mOnlyCore来进行标示.vold服务也是一块知识点,可以单独总结.  
+
 接着分析startCoreServices()函数:  
 ```java
     /**
@@ -615,10 +644,11 @@ android 4.0新增的一个功能，即设备加密（encrypting the device）,�
         mWebViewUpdateService = mSystemServiceManager.startService(WebViewUpdateService.class);
         traceEnd();
     }
-
 ```
-启动了DropBoxManagerService(系统出问题的调用栈信息),BatteryService(电池相关的服务),UsageStatsService,WebViewUpdateService.  
-最后看一下startOtherServices方法，主要用于启动系统中其他的服务，代码很多，这里就不贴代码了，启动的流程和ActivityManagerService的流程类似，会调用服务的构造方法与onStart方法初始化变量。  
+启动了DropBoxManagerService(系统出问题的调用栈信息服务),BatteryService(电池相关的服务),UsageStatsService(搜集用户使用app数据的信息服务类),
+WebViewUpdateService.  
+最后看一下startOtherServices方法，主要用于启动系统中其他的服务，代码很多，这里就不贴代码了，启动的流程和ActivityManagerService的流程类似，
+会调用服务的构造方法与onStart方法初始化变量。  
 ## 总结
 - SystemServer进程是android中一个很重要的进程由Zygote进程启动,是Zygote的嫡长子,如果该进程崩溃,Zygote会调用方法kill掉自己；
 - SystemServer进程主要用于启动系统中的服务；
