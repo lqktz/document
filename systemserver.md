@@ -558,6 +558,7 @@ mSystemServiceManager是系统服务管理对象,在前面介绍的run()里面�
         traceBeginAndSlog("StartPackageManagerService");
         mPackageManagerService = PackageManagerService.main(mSystemContext, installer,
                 mFactoryTestMode != FactoryTest.FACTORY_TEST_OFF, mOnlyCore);
+        //mFirstBoot是判断是否第一次开机的标示,isFirstBoot()是对应的方法,原理就是判断packages.xml是否存在
         mFirstBoot = mPackageManagerService.isFirstBoot();
         mPackageManager = mSystemContext.getPackageManager();
         traceEnd();
