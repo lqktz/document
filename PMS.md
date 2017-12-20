@@ -1,6 +1,15 @@
 #PackageManagerService 源码分析
 
 平台:android O源码  
+本文分析的问题:  
+apk的安装有如下四种方式：  
+1. apk随着PMS的启动而安装(本文)  
+2. adb install安装  
+3. ODM内置商店静默安装  
+4. 拷贝apk到手机，界面安装  
+这四种方式在代码里的实现其实就是如下两种：  
+1. PMS调用scanDirLI扫描安装(本文分析的方式)  
+2. 直接或间接调用installPackageAsUser安装  
 ***
 在systemserver的分析过程中,在startBootstrapServices()中启动PMS是通过调用PackageManagerService.main()启动了PMS服务的,本文接着从这开始分析.  
 `frameworks/base/services/core/java/com/android/server/pm/PackageManagerService.java`
@@ -674,6 +683,7 @@ readPermissions就是从指定目录下，读取xml中的配置的权限信息.�
             mHandlerThread.start();
             //PackageHandler、ProcessLoggingHandler共用ServiceThread
             // 以mHandlerThread线程的looper创建的Handler实例，该Handler运行在mHandlerThread线程
+            // 该消息循环用于处理apk的安装请求
             mHandler = new PackageHandler(mHandlerThread.getLooper());
             mProcessLoggingHandler = new ProcessLoggingHandler();
             //Watchdog监控ServiceThread是否长时间阻塞
@@ -1132,8 +1142,8 @@ Android系统每次启动时，都会重新安装一遍系统中的应用程序�
     }
 
 ```
-经过上面的readLPw函数,将之前手机里面的安装信息都加载进来,接下来开始扫描手机指定放apk的目录
-`frameworks/base/services/core/java/com/android/server/pm/PackageManagerService.java`,继续分析PackageManagerService的构造方法:  
+经过上面的readLPw函数,将之前手机里面的安装信息都加载进来,接下来进入下一个阶段:开始扫描手机指定放apk的目录.  
+回到`frameworks/base/services/core/java/com/android/server/pm/PackageManagerService.java`,继续分析PackageManagerService的构造方法:  
 ```
             // 记录开始扫描的时间
             long startTime = SystemClock.uptimeMillis();
@@ -1163,6 +1173,7 @@ Android系统每次启动时，都会重新安装一遍系统中的应用程序�
                     | PackageParser.PARSE_TRUSTED_OVERLAY, scanFlags | SCAN_TRUSTED_OVERLAY, 0);
 
             //依次扫描放apk的目录
+            ......
 ```
 scanDirLI是用来扫描一个指定目录下的apk文件.接下来分析scanDirLI方法:  
 ```
@@ -1176,7 +1187,7 @@ scanDirLI是用来扫描一个指定目录下的apk文件.接下来分析scanDir
         /// M: Add for Mtprof tool.
         addBootEvent("Android:PMS_scan_data:" + dir.getPath().toString());
 
-        //为了加快扫描速度,使用多线程进行扫描
+        //为了加快扫描速度,使用多线程进行扫描,启动多线程扫描来自QCOM平台
         int iMultitaskNum = SystemProperties.getInt("persist.pm.multitask", 6);
         final MultiTaskDealer dealer = (iMultitaskNum > 1) ? MultiTaskDealer.startDealer(
                 MultiTaskDealer.PACKAGEMANAGER_SCANER, iMultitaskNum) : null;
@@ -1241,7 +1252,6 @@ scanDirLI是用来扫描一个指定目录下的apk文件.接下来分析scanDir
                 throw new IllegalStateException("Unexpected exception occurred while parsing "
                         + parseResult.scanFile, throwable);
             }
-
             // Delete invalid userdata apps
             if ((parseFlags & PackageParser.PARSE_IS_SYSTEM) == 0 &&
                         parserErrorCode == PackageManager.INSTALL_FAILED_INVALID_APK) {
@@ -1267,10 +1277,17 @@ scanDirLI是用来扫描一个指定目录下的apk文件.接下来分析scanDir
         parallelPackageParser.close();
     }
 ```
-上面代码中使用到了一个核心的方法scanPackageLI,来看源码:  
+scanDirLI方法只是去扫描了指定的文件夹  
+*        /system/framework
+*        /system/app
+*        /vendor/app
+*        /data/app
+*        /data/app-private
+然后并没有处理扫描到的apk文件,而是交给scanPackageLI去处理,
+上面代码中使用到了一个核心的方法scanPackageLI,这个方法就是实现对apk文件进行解析和安装的文件.该方法有三个,参数对应的是6参数的,来看源码:  
 ```
     /**
-     *  Scans a package and returns the newly parsed package.
+     *  Scans a package and returns the newly parsed package.//返回的是刚刚解析的这个包.
      *  @throws PackageManagerException on a parse error.
      */
     private PackageParser.Package scanPackageLI(PackageParser.Package pkg, File scanFile,
@@ -1281,6 +1298,7 @@ scanDirLI是用来扫描一个指定目录下的apk文件.接下来分析scanDir
         // packages (parent and children) would be successfully scanned before the
         // actual scan since scanning mutates internal state and we want to atomically
         // install the package and its children.
+        // 从注释看,一个package里面可能存在多个需要解析的文件
         if ((scanFlags & SCAN_CHECK_ONLY) == 0) {
             if (pkg.childPackages != null && pkg.childPackages.size() > 0) {
                 scanFlags |= SCAN_CHECK_ONLY;
@@ -1290,6 +1308,7 @@ scanDirLI是用来扫描一个指定目录下的apk文件.接下来分析scanDir
         }
 
         // Scan the parent
+        //真正的解析工作是scanPackageInternalLI,返回的解析的包也是scanPackageInternalLI返回的
         PackageParser.Package scannedPkg = scanPackageInternalLI(pkg, scanFile, policyFlags,
                 scanFlags, currentTime, user);
 
@@ -1297,10 +1316,9 @@ scanDirLI是用来扫描一个指定目录下的apk文件.接下来分析scanDir
         final int childCount = (pkg.childPackages != null) ? pkg.childPackages.size() : 0;
         for (int i = 0; i < childCount; i++) {
             PackageParser.Package childPackage = pkg.childPackages.get(i);
-            scanPackageInternalLI(childPackage, scanFile, policyFlags, scanFlags,
+            scanPackageInternalLI(childPackage, scanFile, policyFlags, scanFlags,//是scanPackageInternalLI干活
                     currentTime, user);
         }
-
 
         if ((scanFlags & SCAN_CHECK_ONLY) != 0) {
             return scanPackageLI(pkg, scanFile, policyFlags, scanFlags, currentTime, user);
@@ -1308,65 +1326,867 @@ scanDirLI是用来扫描一个指定目录下的apk文件.接下来分析scanDir
 
         return scannedPkg;
     }
-
 ```
-
-
-
-
-
-
-`frameworks/base/services/core/java/com/android/server/pm/PackageManagerService.java`,继续分析PackageManagerService的构造方法: 
-
-
-
-
-
-
-
-
-
-
+OTA升级使用到scanPackageInternalLI,该方法作用就是比对新旧包,判断是否更换.分析scanPackageInternalLI的源码:  
 ```
+    /**
+     *  Scans a package and returns the newly parsed package.
+     *  @throws PackageManagerException on a parse error.
+     */
+    //scanPackageInternalLI方法是把扫描到的androidmainifest数据和之前在手机内扫描得到的数据做对比，然后进行对应操作。
+    private PackageParser.Package scanPackageInternalLI(PackageParser.Package pkg, File scanFile,
+            int policyFlags, int scanFlags, long currentTime, @Nullable UserHandle user)
+            throws PackageManagerException {
+        PackageSetting ps = null;
+        PackageSetting updatedPkg;
+        // reader
+        synchronized (mPackages) {
+            // 看是否是已知的包,并对其进行操作
+            // Look to see if we already know about this package.
+            String oldName = mSettings.getRenamedPackageLPr(pkg.packageName);
+            if (pkg.mOriginalPackages != null && pkg.mOriginalPackages.contains(oldName)) {
+                // This package has been renamed to its original name.  Let's
+                // use that.
+                ps = mSettings.getPackageLPr(oldName);
+            }
+            // If there was no original package, see one for the real package name.
+            if (ps == null) {
+                ps = mSettings.getPackageLPr(pkg.packageName);
+            }
+            // Check to see if this package could be hiding/updating a system
+            // package.  Must look for it either under the original or real
+            // package name depending on our state.
+            updatedPkg = mSettings.getDisabledSystemPkgLPr(ps != null ? ps.name : pkg.packageName);
+            if (DEBUG_INSTALL && updatedPkg != null) Slog.d(TAG, "updatedPkg = " + updatedPkg);
 
-            // Find base frameworks (resource packages without code).
-            scanDirTracedLI(frameworkDir, mDefParseFlags
-                    | PackageParser.PARSE_IS_SYSTEM
-                    | PackageParser.PARSE_IS_SYSTEM_DIR
-                    | PackageParser.PARSE_IS_PRIVILEGED,
-                    scanFlags | SCAN_NO_DEX, 0);
+            // 非第一次启动 如果是一个已卸载的系统应用或者vendor app(厂商应用)则直接返回null
+            /// M: Skip an uninstalled system or vendor app
+            if (!isFirstBoot() && (isVendorApp(pkg) || isSystemApp(pkg))
+                 && ((updatedPkg != null)
+                      || (ps.getInstallStatus() == PackageSettingBase.PKG_INSTALL_INCOMPLETE))) {
+                 Slog.d(TAG, "Skip scanning " + scanFile.toString() + ", package " + updatedPkg +
+                            ", install status:  " + ps.getInstallStatus());
+                 return null;
+            } else if (ps == null && updatedPkg != null) {
+                Slog.d(TAG, "Skip scanning uninstalled package: " + pkg.packageName);
+                return null;
+            }
 
-            /// M: Find vendor frameworks (resource packages without code).
-            File vendorFrameworkDir = new File(Environment.getVendorDirectory(), "framework");
-            scanDirTracedLI(vendorFrameworkDir, PackageParser.PARSE_IS_SYSTEM
-                    | PackageParser.PARSE_IS_SYSTEM_DIR,
-                    scanFlags | SCAN_NO_DEX, 0);
-                        //we will put customers' apps into custpack path, so the path need to be scanf
-            //added for customization begin@{
-            custpackAppFlagFile = new File("/data/custpack_app_flag");
-            custpackRemovealbeAppInfoFile = new File("/data/custpack_removealbeappinfo_flag");
-            if (!custpackRemovealbeAppInfoFile.exists()) {
-                try {
-                    custpackRemovealbeAppInfoFile.createNewFile();
-                } catch (IOException e) {
-                    // TODO Auto-generated catch block
-                    Slog.w(TAG, "Create file " + custpackRemovealbeAppInfoFile.getPath()+" error", e);
+            // If this is a package we don't know about on the system partition, we
+            // may need to remove disabled child packages on the system partition
+            // or may need to not add child packages if the parent apk is updated
+            // on the data partition and no longer defines this child package.
+            if ((policyFlags & PackageParser.PARSE_IS_SYSTEM) != 0) {
+                // If this is a parent package for an updated system app and this system
+                // app got an OTA update which no longer defines some of the child packages
+                // we have to prune them from the disabled system packages.
+                PackageSetting disabledPs = mSettings.getDisabledSystemPkgLPr(pkg.packageName);
+                if (disabledPs != null) {//和OTA升级相关
+                    final int scannedChildCount = (pkg.childPackages != null)
+                            ? pkg.childPackages.size() : 0;
+                    final int disabledChildCount = disabledPs.childPackageNames != null
+                            ? disabledPs.childPackageNames.size() : 0;
+                    for (int i = 0; i < disabledChildCount; i++) {
+                        String disabledChildPackageName = disabledPs.childPackageNames.get(i);
+                        boolean disabledPackageAvailable = false;
+                        for (int j = 0; j < scannedChildCount; j++) {
+                            PackageParser.Package childPkg = pkg.childPackages.get(j);
+                            if (childPkg.packageName.equals(disabledChildPackageName)) {
+                                disabledPackageAvailable = true;
+                                break;
+                            }
+                         }
+                         if (!disabledPackageAvailable) {
+                             mSettings.removeDisabledSystemPackageLPw(disabledChildPackageName);
+                         }
+                    }
+                }
+            }
+        }
+
+        // 首先检查是否包含更新的系统包，包括vendor目录下
+        final boolean isUpdatedPkg = updatedPkg != null;
+        /// M: [Operator] Package in vendor folder should also be checked.
+        final boolean isUpdatedSystemPkg = isUpdatedPkg
+                && ((policyFlags & PackageParser.PARSE_IS_SYSTEM) != 0
+                 || (policyFlags & PackageParser.PARSE_IS_OPERATOR) != 0);
+        boolean isUpdatedPkgBetter = false;
+        // First check if this is a system package that may involve an update
+        if (isUpdatedSystemPkg) {//是一个更新的系统包
+            // If new package is not located in "/system/priv-app" (e.g. due to an OTA),
+            // it needs to drop FLAG_PRIVILEGED.
+            //如果新的包不在priv-app下，应该下调Flag
+            if (locationIsPrivileged(scanFile)) {
+                updatedPkg.pkgPrivateFlags |= ApplicationInfo.PRIVATE_FLAG_PRIVILEGED;
+            } else {
+                updatedPkg.pkgPrivateFlags &= ~ApplicationInfo.PRIVATE_FLAG_PRIVILEGED;
+            }
+
+            //如果扫描到的包路径发生了变化，根据已经存储的内容来判断该如何操作此app,记录下flag用于后面的使用
+            if (ps != null && !ps.codePath.equals(scanFile)) {
+                // The path has changed from what was last scanned...  check the
+                // version of the new path against what we have stored to determine
+                // what to do.
+                if (DEBUG_INSTALL) Slog.d(TAG, "Path changing from " + ps.codePath);
+                ///M: [Operator] Allow vendor package downgrade.
+                ///Always install the updated one on data partition.
+                if (pkg.mVersionCode < ps.versionCode
+                       || ((policyFlags & PackageParser.PARSE_IS_OPERATOR) != 0)
+                       /// M: Removable system app support
+                       || isRemovableSysApp(pkg.packageName)) {
+                    // The system package has been updated and the code path does not match
+                    // Ignore entry. Skip it.
+                    if (DEBUG_INSTALL) Slog.i(TAG, "Package " + ps.name + " at " + scanFile
+                            + " ignored: updated version " + ps.versionCode
+                            + " better than this " + pkg.mVersionCode);
+                    if (!updatedPkg.codePath.equals(scanFile)) {
+                        Slog.w(PackageManagerService.TAG, "Code path for hidden system pkg "
+                                + ps.name + " changing from " + updatedPkg.codePathString
+                                + " to " + scanFile);
+                        updatedPkg.codePath = scanFile;
+                        updatedPkg.codePathString = scanFile.toString();
+                        updatedPkg.resourcePath = scanFile;
+                        updatedPkg.resourcePathString = scanFile.toString();
+                    }
+                    updatedPkg.pkg = pkg;
+                    updatedPkg.versionCode = pkg.mVersionCode;
+
+                    // Update the disabled system child packages to point to the package too.
+                    final int childCount = updatedPkg.childPackageNames != null
+                            ? updatedPkg.childPackageNames.size() : 0;
+                    for (int i = 0; i < childCount; i++) {
+                        String childPackageName = updatedPkg.childPackageNames.get(i);
+                        PackageSetting updatedChildPkg = mSettings.getDisabledSystemPkgLPr(
+                                childPackageName);
+                        if (updatedChildPkg != null) {
+                            updatedChildPkg.pkg = pkg;
+                            updatedChildPkg.versionCode = pkg.mVersionCode;
+                        }
+                    }
+                } else {// /system下的package比我们在/data目下pacakage好
+                    // The current app on the system partition is better than
+                    // what we have updated to on the data partition; switch
+                    // back to the system partition version.
+                    // At this point, its safely assumed that package installation for
+                    // apps in system partition will go through. If not there won't be a working
+                    // version of the app
+                    // writer
+                    synchronized (mPackages) {
+                        // Just remove the loaded entries from package lists.
+                        mPackages.remove(ps.name);
+                    }
+
+                    logCriticalInfo(Log.WARN, "Package " + ps.name + " at " + scanFile
+                            + " reverting from " + ps.codePathString
+                            + ": new version " + pkg.mVersionCode
+                            + " better than installed " + ps.versionCode);
+
+                    InstallArgs args = createInstallArgsForExisting(packageFlagsToInstallFlags(ps),
+                            ps.codePathString, ps.resourcePathString, getAppDexInstructionSets(ps));
+                    synchronized (mInstallLock) {
+                        args.cleanUpResourcesLI();
+                    }
+                    synchronized (mPackages) {
+                        mSettings.enableSystemPackageLPw(ps.name);
+                    }
+                    isUpdatedPkgBetter = true;
+                }
+            }
+        }
+
+        String resourcePath = null;
+        String baseResourcePath = null;
+        if ((policyFlags & PackageParser.PARSE_FORWARD_LOCK) != 0 && !isUpdatedPkgBetter) {
+            if (ps != null && ps.resourcePathString != null) {
+                resourcePath = ps.resourcePathString;
+                baseResourcePath = ps.resourcePathString;
+            } else {
+                // Should not happen at all. Just log an error.
+                Slog.e(TAG, "Resource path not set for package " + pkg.packageName);
+            }
+        } else {
+            resourcePath = pkg.codePath;
+            baseResourcePath = pkg.baseCodePath;
+        }
+
+        //精确的设置app的路径
+        // Set application objects path explicitly.
+        pkg.setApplicationVolumeUuid(pkg.volumeUuid);
+        pkg.setApplicationInfoCodePath(pkg.codePath);
+        pkg.setApplicationInfoBaseCodePath(pkg.baseCodePath);
+        pkg.setApplicationInfoSplitCodePaths(pkg.splitCodePaths);
+        pkg.setApplicationInfoResourcePath(resourcePath);
+        pkg.setApplicationInfoBaseResourcePath(baseResourcePath);
+        pkg.setApplicationInfoSplitResourcePaths(pkg.splitCodePaths);
+
+        // throw an exception if we have an update to a system application, but, it's not more
+        // recent than the package we've already scanned
+        if (isUpdatedSystemPkg && !isUpdatedPkgBetter) {
+            // Set CPU Abis to application info.
+            if ((scanFlags & SCAN_FIRST_BOOT_OR_UPGRADE) != 0) {
+                final String cpuAbiOverride = deriveAbiOverride(pkg.cpuAbiOverride, updatedPkg);
+                derivePackageAbi(pkg, scanFile, cpuAbiOverride, false, mAppLib32InstallDir);
+            } else {
+                pkg.applicationInfo.primaryCpuAbi = updatedPkg.primaryCpuAbiString;
+                pkg.applicationInfo.secondaryCpuAbi = updatedPkg.secondaryCpuAbiString;
+            }
+
+            throw new PackageManagerException(Log.WARN, "Package " + ps.name + " at "
+                    + scanFile + " ignored: updated version " + ps.versionCode
+                    + " better than this " + pkg.mVersionCode);
+        }
+
+        if (isUpdatedPkg) {
+            // An updated system app will not have the PARSE_IS_SYSTEM flag set
+            // initially
+            /** M: [Operator] Only system app have system flag @{ */
+            if (isSystemApp(updatedPkg)) {
+                policyFlags |= PackageParser.PARSE_IS_SYSTEM;
+            }
+            /// M: [Operator] Add operator flags for updated vendor package
+            /// We should consider an operator app with flag changed after OTA
+            if ((isVendorApp(updatedPkg) || locationIsOperator(updatedPkg.codePath))
+                    && locationIsOperator(ps.codePath)) {
+                policyFlags |= PackageParser.PARSE_IS_OPERATOR;
+            }
+            /** @} */
+
+            // An updated privileged app will not have the PARSE_IS_PRIVILEGED
+            // flag set initially
+            if ((updatedPkg.pkgPrivateFlags & ApplicationInfo.PRIVATE_FLAG_PRIVILEGED) != 0) {
+                policyFlags |= PackageParser.PARSE_IS_PRIVILEGED;
+            }
+        }
+
+        //扫描验证证书
+        // Verify certificates against what was last scanned
+        collectCertificatesLI(ps, pkg, scanFile, policyFlags);
+
+        //一个新的system app，但有一个已安装的同名非系统app
+        // 这里的代码是处理这样的情景：当系统更新后，可能更新包会多出一些system app出来，那么如果此时用户恰好安装了一个同包名的app.
+        // 两者的签名还不一致，那么就删除扫描到的系统应用的信息。
+        // 当两者签名一致时，如果扫描到的app版本更高，那么就删除安装的应用；如果扫描的app版本低，那么隐藏扫描到的系统应用。
+       /*
+         * A new system app appeared, but we already had a non-system one of the
+         * same name installed earlier.
+         */
+        boolean shouldHideSystemApp = false;
+        if (!isUpdatedPkg && ps != null
+                && (policyFlags & PackageParser.PARSE_IS_SYSTEM_DIR) != 0 && !isSystemApp(ps)) {
+            /*
+             * Check to make sure the signatures match first. If they don't,
+             * wipe the installed application and its data.
+             */
+            //如果签名不同，擦除已安装应用和数据
+            if (compareSignatures(ps.signatures.mSignatures, pkg.mSignatures)
+                    != PackageManager.SIGNATURE_MATCH) {
+                logCriticalInfo(Log.WARN, "Package " + ps.name + " appeared on system, but"
+                        + " signatures don't match existing userdata copy; removing");
+                try (PackageFreezer freezer = freezePackage(pkg.packageName,
+                        "scanPackageInternalLI")) {
+                    deletePackageLIF(pkg.packageName, null, true, null, 0, null, false, null);
+                }
+                ps = null;
+            } else {//签名相同,继续判断
+                /*
+                 * If the newly-added system app is an older version than the
+                 * already installed version, hide it. It will be scanned later
+                 * and re-added like an update.
+                 */
+                if (pkg.mVersionCode <= ps.versionCode) {//新添加app更旧，则隐藏此app，后续会重新添加
+                    shouldHideSystemApp = true;
+                    logCriticalInfo(Log.INFO, "Package " + ps.name + " appeared at " + scanFile
+                            + " but new version " + pkg.mVersionCode + " better than installed "
+                            + ps.versionCode + "; hiding system");
+                } else {//如果比已安装的app新，则保留app数据直接安装更新此system app
+                    /*
+                     * The newly found system app is a newer version that the
+                     * one previously installed. Simply remove the
+                     * already-installed application and replace it with our own
+                     * while keeping the application data.
+                     */
+                    logCriticalInfo(Log.WARN, "Package " + ps.name + " at " + scanFile
+                            + " reverting from " + ps.codePathString + ": new version "
+                            + pkg.mVersionCode + " better than installed " + ps.versionCode);
+                    InstallArgs args = createInstallArgsForExisting(packageFlagsToInstallFlags(ps),
+                            ps.codePathString, ps.resourcePathString, getAppDexInstructionSets(ps));
+                    synchronized (mInstallLock) {
+                        args.cleanUpResourcesLI();
+                    }
+                }
+            }
+        }
+
+        // The apk is forward locked (not public) if its code and resources
+        // are kept in different files. (except for app in either system or
+        // vendor path).
+        // TODO grab this value from PackageSettings
+        //如果app中制定的资源在别的路径，则从PackageSettings中抓取
+        if ((policyFlags & PackageParser.PARSE_IS_SYSTEM_DIR) == 0) {
+            if (ps != null && !ps.codePath.equals(ps.resourcePath)) {
+                policyFlags |= PackageParser.PARSE_FORWARD_LOCK;
+            }
+        }
+
+        final int userId = ((user == null) ? 0 : user.getIdentifier());
+        if (ps != null && ps.getInstantApp(userId)) {
+            scanFlags |= SCAN_AS_INSTANT_APP;
+        }
+
+        // Note that we invoke the following method only if we are about to unpack an application
+        PackageParser.Package scannedPkg = scanPackageLI(pkg, policyFlags, scanFlags//这里是5参数的scanPackageLI方法,第一个参数是PackageParser.Package类型
+                | SCAN_UPDATE_SIGNATURE, currentTime, user);
+
+        /*
+         * If the system app should be overridden by a previously installed
+         * data, hide the system app now and let the /data/app scan pick it up
+         * again.
+         */
+        if (shouldHideSystemApp) {//该package被隐藏
+            synchronized (mPackages) {
+                mSettings.disableSystemPackageLPw(pkg.packageName, true);
+            }
+        }
+
+        return scannedPkg;
+    }
+```
+从上面的分析看出scanPackageInternalLI方法主要还是进行比对新旧package信息(主要是OTA升级带来的升级包),进行相关的参数判断,设置不同的参数,最后交给5参数的scanPackageLI方法,
+从5参数的scanPackageLI方法开始才开始,所有合法性验证都通过,开始解析,安装这个package.:  
+```
+    private PackageParser.Package scanPackageLI(PackageParser.Package pkg, final int policyFlags,
+            int scanFlags, long currentTime, @Nullable UserHandle user)
+                    throws PackageManagerException {
+        boolean success = false;
+        try {//scanPackageDirtyLI是安装的核心函数,不论是开机扫描还是adb安装都会调用到该函数进行APK安装
+            final PackageParser.Package res = scanPackageDirtyLI(pkg, policyFlags, scanFlags,
+                    currentTime, user);
+            success = true;
+            return res;
+        } finally {
+            if (!success && (scanFlags & SCAN_DELETE_DATA_ON_FAILURES) != 0) {
+                // DELETE_DATA_ON_FAILURES is only used by frozen paths
+                destroyAppDataLIF(pkg, UserHandle.USER_ALL,
+                        StorageManager.FLAG_STORAGE_DE | StorageManager.FLAG_STORAGE_CE);
+                destroyAppProfilesLIF(pkg, UserHandle.USER_ALL);
+            }
+        }
+    }
+```
+快来看看这个scanPackageDirtyLI函数:  
+```
+    // 获得前面所解析的应用程序的组件配置信息，以及为这个应用程序分配Linux用户ID
+    private PackageParser.Package scanPackageDirtyLI(PackageParser.Package pkg,
+            final int policyFlags, final int scanFlags, long currentTime, @Nullable UserHandle user)
+                    throws PackageManagerException {
+
+        if (DEBUG_PACKAGE_SCANNING) {
+            if ((policyFlags & PackageParser.PARSE_CHATTY) != 0)
+                Log.d(TAG, "Scanning package " + pkg.packageName);
+        }
+
+        applyPolicy(pkg, policyFlags);
+
+        // Begin added by Xutao.Wu for Task5185134 on 2017/09/22
+        if (PackageManager.TCT_RETAILDEMO_PACKAGE_NAME.equals(pkg.packageName)){
+            if (DEBUG_INSTALL) Slog.w(TAG,"scanPackageDirtyLI, set retaildemo as SYSTEM PRIVILEGED");
+            pkg.applicationInfo.privateFlags |= ApplicationInfo.PRIVATE_FLAG_PRIVILEGED;
+            pkg.applicationInfo.flags |= ApplicationInfo.FLAG_SYSTEM;
+        }
+        // End added by Xutao.Wu for Task5185134 on 2017/09/22
+        // 方法的作用是判断给定的pkg是不是有效的
+        assertPackageIsValid(pkg, policyFlags, scanFlags);
+
+        // Initialize package source and resource directories
+        final File scanFile = new File(pkg.codePath);
+        final File destCodeFile = new File(pkg.applicationInfo.getCodePath());
+        final File destResourceFile = new File(pkg.applicationInfo.getResourcePath());
+
+        SharedUserSetting suid = null;
+        PackageSetting pkgSetting = null;
+
+        // Getting the package setting may have a side-effect, so if we
+        // are only checking if scan would succeed, stash a copy of the
+        // old setting to restore at the end.
+        PackageSetting nonMutatedPs = null;
+
+        // We keep references to the derived CPU Abis from settings in oder to reuse
+        // them in the case where we're not upgrading or booting for the first time.
+        String primaryCpuAbiFromSettings = null;
+        String secondaryCpuAbiFromSettings = null;
+
+        // writer
+        // 为参数pkg所描述的应用程序分配Linux用户ID
+        synchronized (mPackages) {
+            if (pkg.mSharedUserId != null) {// 如果该应用有sharedUserId属性，则从mSettings中获取要为它分配的共享uid
+                // SIDE EFFECTS; may potentially allocate a new shared user
+                suid = mSettings.getSharedUserLPw(
+                        pkg.mSharedUserId, 0 /*pkgFlags*/, 0 /*pkgPrivateFlags*/, true /*create*/);
+                if (DEBUG_PACKAGE_SCANNING) {
+                    if ((policyFlags & PackageParser.PARSE_CHATTY) != 0)
+                        Log.d(TAG, "Shared UserID " + pkg.mSharedUserId + " (uid=" + suid.userId
+                                + "): packages=" + suid.packages);
                 }
             }
 
-//             mCustPriAppInstallDir = new File(Environment.getCustpackDirectory(),"app/unremoveable/priv-app");
+            // Check if we are renaming from an original package name.
+            PackageSetting origPackage = null;
+            String realName = null;
+            if (pkg.mOriginalPackages != null) {
+                // This package may need to be renamed to a previously
+                // installed name.  Let's check on that...
+                final String renamed = mSettings.getRenamedPackageLPr(pkg.mRealPackage);
+                if (pkg.mOriginalPackages.contains(renamed)) {
+                    // This package had originally been installed as the
+                    // original name, and we have already taken care of
+                    // transitioning to the new one.  Just update the new
+                    // one to continue using the old name.
+                    realName = pkg.mRealPackage;
+                    if (!pkg.packageName.equals(renamed)) {
+                        // Callers into this function may have already taken
+                        // care of renaming the package; only do it here if
+                        // it is not already done.
+                        pkg.setPackageName(renamed);
+                    }
+                } else {
+                    for (int i=pkg.mOriginalPackages.size()-1; i>=0; i--) {
+                        if ((origPackage = mSettings.getPackageLPr(
+                                pkg.mOriginalPackages.get(i))) != null) {
+                            // We do have the package already installed under its
+                            // original name...  should we use it?
+                            if (!verifyPackageUpdateLPr(origPackage, pkg)) {
+                                // New package is not compatible with original.
+                                origPackage = null;
+                                continue;
+                            } else if (origPackage.sharedUser != null) {
+                                // Make sure uid is compatible between packages.
+                                if (!origPackage.sharedUser.name.equals(pkg.mSharedUserId)) {
+                                    Slog.w(TAG, "Unable to migrate data from " + origPackage.name
+                                            + " to " + pkg.packageName + ": old uid "
+                                            + origPackage.sharedUser.name
+                                            + " differs from " + pkg.mSharedUserId);
+                                    origPackage = null;
+                                    continue;
+                                }
+                                // TODO: Add case when shared user id is added [b/28144775]
+                            } else {
+                                if (DEBUG_UPGRADE) Log.v(TAG, "Renaming new package "
+                                        + pkg.packageName + " to old name " + origPackage.name);
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
 
-//             mCustAppInstallDir = new File(Environment.getCustpackDirectory(),"app/unremoveable/app");
-//             mCustAppInstallUserDir = new File(Environment.getCustpackDirectory(),"app/removeable/app");
-               mCustWithLibAppInstallUserDir = new File(Environment.getRootDirectory(),"custpack/app/removeable/withlibs");
-               mCustWithoutLibAppInstallUserDir = new File(Environment.getRootDirectory(),"custpack/app/removeable/withoutlibs");
-               mCustAppWithLibInstallDir = new File(Environment.getRootDirectory(),"custpack/app/unremoveable/withlibs");
-               mCustAppWithoutLibInstallDir = new File(Environment.getRootDirectory(),"custpack/app/unremoveable/withoutlibs");
-               mCustPriAppInstallDir = new File(Environment.getRootDirectory(),"custpack/app/unremoveable/priv-app");
+            if (mTransferedPackages.contains(pkg.packageName)) {
+                Slog.w(TAG, "Package " + pkg.packageName
+                        + " was transferred to another, but its .apk remains");
+            }
+
+            // See comments in nonMutatedPs declaration
+            if ((scanFlags & SCAN_CHECK_ONLY) != 0) {
+                PackageSetting foundPs = mSettings.getPackageLPr(pkg.packageName);
+                if (foundPs != null) {
+                    nonMutatedPs = new PackageSetting(foundPs);
+                }
+            }
+
+            if ((scanFlags & SCAN_FIRST_BOOT_OR_UPGRADE) == 0) {
+                PackageSetting foundPs = mSettings.getPackageLPr(pkg.packageName);
+                if (foundPs != null) {
+                    primaryCpuAbiFromSettings = foundPs.primaryCpuAbiString;
+                    secondaryCpuAbiFromSettings = foundPs.secondaryCpuAbiString;
+                }
+            }
+
+            // 创建PackageSetting并设置
+            pkgSetting = mSettings.getPackageLPr(pkg.packageName);
+            if (pkgSetting != null && pkgSetting.sharedUser != suid) {
+                PackageManagerService.reportSettingsProblem(Log.WARN,
+                        "Package " + pkg.packageName + " shared user changed from "
+                                + (pkgSetting.sharedUser != null
+                                        ? pkgSetting.sharedUser.name : "<nothing>")
+                                + " to "
+                                + (suid != null ? suid.name : "<nothing>")
+                                + "; replacing with new");
+                pkgSetting = null;
+            }
+            final PackageSetting oldPkgSetting =
+                    pkgSetting == null ? null : new PackageSetting(pkgSetting);
+            final PackageSetting disabledPkgSetting =
+                    mSettings.getDisabledSystemPkgLPr(pkg.packageName);
+
+            String[] usesStaticLibraries = null;
+            if (pkg.usesStaticLibraries != null) {
+                usesStaticLibraries = new String[pkg.usesStaticLibraries.size()];
+                pkg.usesStaticLibraries.toArray(usesStaticLibraries);
+            }
+
+            if (pkgSetting == null) {
+                final String parentPackageName = (pkg.parentPackage != null)
+                        ? pkg.parentPackage.packageName : null;
+                final boolean instantApp = (scanFlags & SCAN_AS_INSTANT_APP) != 0;
+                // REMOVE SharedUserSetting from method; update in a separate call
+                pkgSetting = Settings.createNewSetting(pkg.packageName, origPackage,
+                        disabledPkgSetting, realName, suid, destCodeFile, destResourceFile,
+                        pkg.applicationInfo.nativeLibraryRootDir, pkg.applicationInfo.primaryCpuAbi,
+                        pkg.applicationInfo.secondaryCpuAbi, pkg.mVersionCode,
+                        pkg.applicationInfo.flags, pkg.applicationInfo.privateFlags,
+                        /// M: [FlagExt] Add flagsEx
+                        pkg.applicationInfo.flagsEx, user,
+                        true /*allowInstall*/, instantApp, parentPackageName,
+                        pkg.getChildPackageNames(), UserManagerService.getInstance(),
+                        usesStaticLibraries, pkg.usesStaticLibrariesVersions);
+                // SIDE EFFECTS; updates system state; move elsewhere
+                if (origPackage != null) {
+                    mSettings.addRenamedPackageLPw(pkg.packageName, origPackage.name);
+                }
+                mSettings.addUserToSettingLPw(pkgSetting);
+            } else {
+                // REMOVE SharedUserSetting from method; update in a separate call.
+                //
+                // TODO(narayan): This update is bogus. nativeLibraryDir & primaryCpuAbi,
+                // secondaryCpuAbi are not known at this point so we always update them
+                // to null here, only to reset them at a later point.
+                Settings.updatePackageSetting(pkgSetting, disabledPkgSetting, suid, destCodeFile,
+                        pkg.applicationInfo.nativeLibraryDir, pkg.applicationInfo.primaryCpuAbi,
+                        pkg.applicationInfo.secondaryCpuAbi, pkg.applicationInfo.flags,
+                        pkg.applicationInfo.privateFlags, pkg.getChildPackageNames(),
+                        UserManagerService.getInstance(), usesStaticLibraries,
+                        pkg.usesStaticLibrariesVersions);
+            }
+            // SIDE EFFECTS; persists system state to files on disk; move elsewhere
+            mSettings.writeUserRestrictionsLPw(pkgSetting, oldPkgSetting);
+
+            // SIDE EFFECTS; modifies system state; move elsewhere
+            if (pkgSetting.origPackage != null) {
+                // If we are first transitioning from an original package,
+                // fix up the new package's name now.  We need to do this after
+                // looking up the package under its new name, so getPackageLP
+                // can take care of fiddling things correctly.
+                pkg.setPackageName(origPackage.name);
+
+                // File a report about this.
+                String msg = "New package " + pkgSetting.realName
+                        + " renamed to replace old package " + pkgSetting.name;
+                reportSettingsProblem(Log.WARN, msg);
+
+                // Make a note of it.
+                if ((scanFlags & SCAN_CHECK_ONLY) == 0) {
+                    mTransferedPackages.add(origPackage.name);
+                }
+
+                // No longer need to retain this.
+                pkgSetting.origPackage = null;
+            }
+
+            // SIDE EFFECTS; modifies system state; move elsewhere
+            if ((scanFlags & SCAN_CHECK_ONLY) == 0 && realName != null) {
+                // Make a note of it.
+                mTransferedPackages.add(pkg.packageName);
+            }
+
+            if (mSettings.isDisabledSystemPackageLPr(pkg.packageName)) {
+                /** M: [Operator] Operator package should not have FLAG_UPDATED_SYSTEM_APP @{ */
+                PackageSetting oldPs = mSettings.getDisabledSystemPkgLPr(pkg.packageName);
+                if (oldPs != null && !isVendorApp(oldPs)) {
+                pkg.applicationInfo.flags |= ApplicationInfo.FLAG_UPDATED_SYSTEM_APP;
+                }
+                /** @} */
+            }
+
+            if ((scanFlags & SCAN_BOOTING) == 0
+                    && (policyFlags & PackageParser.PARSE_IS_SYSTEM_DIR) == 0) {
+                // Check all shared libraries and map to their actual file path.
+                // We only do this here for apps not on a system dir, because those
+                // are the only ones that can fail an install due to this.  We
+                // will take care of the system apps by updating all of their
+                // library paths after the scan is done. Also during the initial
+                // scan don't update any libs as we do this wholesale after all
+                // apps are scanned to avoid dependency based scanning.
+                updateSharedLibrariesLPr(pkg, null);//创建共享库
+            }
+
+            if (mFoundPolicyFile) {
+                SELinuxMMAC.assignSeInfoValue(pkg);//设置SELinux策略
+            }
+            pkg.applicationInfo.uid = pkgSetting.appId;
+            pkg.mExtras = pkgSetting;
 
 
+            // Static shared libs have same package with different versions where
+            // we internally use a synthetic package name to allow multiple versions
+            // of the same package, therefore we need to compare signatures against
+            // the package setting for the latest library version.
+            //验证签名信息的合法性
+            PackageSetting signatureCheckPs = pkgSetting;
+            if (pkg.applicationInfo.isStaticSharedLibrary()) {
+                SharedLibraryEntry libraryEntry = getLatestSharedLibraVersionLPr(pkg);
+                if (libraryEntry != null) {
+                    signatureCheckPs = mSettings.getPackageLPr(libraryEntry.apk);
+                }
+            }
 
+            if (shouldCheckUpgradeKeySetLP(signatureCheckPs, scanFlags)) {
+                if (checkUpgradeKeySetLP(signatureCheckPs, pkg)) {
+                    // We just determined the app is signed correctly, so bring
+                    // over the latest parsed certs.
+                    pkgSetting.signatures.mSignatures = pkg.mSignatures;
+                } else {
+                    if ((policyFlags & PackageParser.PARSE_IS_SYSTEM_DIR) == 0) {
+                        throw new PackageManagerException(INSTALL_FAILED_UPDATE_INCOMPATIBLE,
+                                "Package " + pkg.packageName + " upgrade keys do not match the "
+                                + "previously installed version");
+                    } else {
+                        pkgSetting.signatures.mSignatures = pkg.mSignatures;
+                        String msg = "System package " + pkg.packageName
+                                + " signature changed; retaining data.";
+                        reportSettingsProblem(Log.WARN, msg);
+                    }
+                }
+            } else {
+                try {
+                    // SIDE EFFECTS; compareSignaturesCompat() changes KeysetManagerService
+                    verifySignaturesLP(signatureCheckPs, pkg);
+                    // We just determined the app is signed correctly, so bring
+                    // over the latest parsed certs.
+                    pkgSetting.signatures.mSignatures = pkg.mSignatures;
+                } catch (PackageManagerException e) {
+                    ///M: Add for operator APP.
+                    if ((policyFlags & PackageParser.PARSE_IS_SYSTEM_DIR) == 0
+                          && (policyFlags & PackageParser.PARSE_IS_OPERATOR) == 0) {
+                        throw e;
+                    }
+                    // The signature has changed, but this package is in the system
+                    // image...  let's recover!
+                    pkgSetting.signatures.mSignatures = pkg.mSignatures;
+                    // However...  if this package is part of a shared user, but it
+                    // doesn't match the signature of the shared user, let's fail.
+                    // What this means is that you can't change the signatures
+                    // associated with an overall shared user, which doesn't seem all
+                    // that unreasonable.
+                    if (signatureCheckPs.sharedUser != null) {
+                        if (compareSignatures(signatureCheckPs.sharedUser.signatures.mSignatures,
+                                pkg.mSignatures) != PackageManager.SIGNATURE_MATCH) {
+                            throw new PackageManagerException(
+                                    INSTALL_PARSE_FAILED_INCONSISTENT_CERTIFICATES,
+                                    "Signature mismatch for shared user: "
+                                            + pkgSetting.sharedUser);
+                        }
+                    }
+                    // File a report about this.
+                    String msg = "System package " + pkg.packageName
+                            + " signature changed; retaining data.";
+                    reportSettingsProblem(Log.WARN, msg);
+                }
+            }
 
+            if ((scanFlags & SCAN_CHECK_ONLY) == 0 && pkg.mAdoptPermissions != null) {
+                // This package wants to adopt ownership of permissions from
+                // another package.
+                // 是否需要获取其他包的权限
+                for (int i = pkg.mAdoptPermissions.size() - 1; i >= 0; i--) {
+                    final String origName = pkg.mAdoptPermissions.get(i);
+                    final PackageSetting orig = mSettings.getPackageLPr(origName);
+                    if (orig != null) {
+                        if (verifyPackageUpdateLPr(orig, pkg)) {
+                            Slog.i(TAG, "Adopting permissions from " + origName + " to "
+                                    + pkg.packageName);
+                            // SIDE EFFECTS; updates permissions system state; move elsewhere
+                            mSettings.transferPermissionsLPw(origName, pkg.packageName);
+                        }
+                    }
+                }
+            }
+        }
 
+        //确定进程名称
+        pkg.applicationInfo.processName = fixProcessName(
+                pkg.applicationInfo.packageName,
+                pkg.applicationInfo.processName);
 
+        if (pkg != mPlatformPackage) {
+            // Get all of our default paths setup
+            pkg.applicationInfo.initForUser(UserHandle.USER_SYSTEM);
+        }
 
+        final String cpuAbiOverride = deriveAbiOverride(pkg.cpuAbiOverride, pkgSetting);
+
+        if ((scanFlags & SCAN_NEW_INSTALL) == 0) {
+            if ((scanFlags & SCAN_FIRST_BOOT_OR_UPGRADE) != 0) {
+                Trace.traceBegin(TRACE_TAG_PACKAGE_MANAGER, "derivePackageAbi");
+                final boolean extractNativeLibs = !pkg.isLibrary();
+                derivePackageAbi(pkg, scanFile, cpuAbiOverride, extractNativeLibs,
+                        mAppLib32InstallDir);
+                Trace.traceEnd(TRACE_TAG_PACKAGE_MANAGER);
+
+                // Some system apps still use directory structure for native libraries
+                // in which case we might end up not detecting abi solely based on apk
+                // structure. Try to detect abi based on directory structure.
+                if (isSystemApp(pkg) && !pkg.isUpdatedSystemApp() &&
+                        pkg.applicationInfo.primaryCpuAbi == null) {
+                    setBundledAppAbisAndRoots(pkg, pkgSetting);
+                    setNativeLibraryPaths(pkg, mAppLib32InstallDir);
+                }
+            } else {
+                // This is not a first boot or an upgrade, don't bother deriving the
+                // ABI during the scan. Instead, trust the value that was stored in the
+                // package setting.
+                pkg.applicationInfo.primaryCpuAbi = primaryCpuAbiFromSettings;
+                pkg.applicationInfo.secondaryCpuAbi = secondaryCpuAbiFromSettings;
+
+                setNativeLibraryPaths(pkg, mAppLib32InstallDir);
+
+                if (DEBUG_ABI_SELECTION) {
+                    Slog.i(TAG, "Using ABIS and native lib paths from settings : " +
+                        pkg.packageName + " " + pkg.applicationInfo.primaryCpuAbi + ", " +
+                        pkg.applicationInfo.secondaryCpuAbi);
+                }
+            }
+        } else {
+            if ((scanFlags & SCAN_MOVE) != 0) {
+                // We haven't run dex-opt for this move (since we've moved the compiled output too)
+                // but we already have this packages package info in the PackageSetting. We just
+                // use that and derive the native library path based on the new codepath.
+                pkg.applicationInfo.primaryCpuAbi = pkgSetting.primaryCpuAbiString;
+                pkg.applicationInfo.secondaryCpuAbi = pkgSetting.secondaryCpuAbiString;
+            }
+
+            // Set native library paths again. For moves, the path will be updated based on the
+            // ABIs we've determined above. For non-moves, the path will be updated based on the
+            // ABIs we determined during compilation, but the path will depend on the final
+            // package path (after the rename away from the stage path).
+            setNativeLibraryPaths(pkg, mAppLib32InstallDir);
+        }
+
+        // This is a special case for the "system" package, where the ABI is
+        // dictated by the zygote configuration (and init.rc). We should keep track
+        // of this ABI so that we can deal with "normal" applications that run under
+        // the same UID correctly.
+        if (mPlatformPackage == pkg) {
+            pkg.applicationInfo.primaryCpuAbi = VMRuntime.getRuntime().is64Bit() ?
+                    Build.SUPPORTED_64_BIT_ABIS[0] : Build.SUPPORTED_32_BIT_ABIS[0];
+        }
+
+        // If there's a mismatch between the abi-override in the package setting
+        // and the abiOverride specified for the install. Warn about this because we
+        // would've already compiled the app without taking the package setting into
+        // account.
+        if ((scanFlags & SCAN_NO_DEX) == 0 && (scanFlags & SCAN_NEW_INSTALL) != 0) {
+            if (cpuAbiOverride == null && pkgSetting.cpuAbiOverrideString != null) {
+                Slog.w(TAG, "Ignoring persisted ABI override " + cpuAbiOverride +
+                        " for package " + pkg.packageName);
+            }
+        }
+
+        // CPU描述
+        pkgSetting.primaryCpuAbiString = pkg.applicationInfo.primaryCpuAbi;
+        pkgSetting.secondaryCpuAbiString = pkg.applicationInfo.secondaryCpuAbi;
+        pkgSetting.cpuAbiOverrideString = cpuAbiOverride;
+
+        // Copy the derived override back to the parsed package, so that we can
+        // update the package settings accordingly.
+        pkg.cpuAbiOverride = cpuAbiOverride;
+
+        if (DEBUG_ABI_SELECTION) {
+            Slog.d(TAG, "Resolved nativeLibraryRoot for " + pkg.applicationInfo.packageName
+                    + " to root=" + pkg.applicationInfo.nativeLibraryRootDir + ", isa="
+                    + pkg.applicationInfo.nativeLibraryRootRequiresIsa);
+        }
+
+        // Push the derived path down into PackageSettings so we know what to
+        // clean up at uninstall time.
+        pkgSetting.legacyNativeLibraryPathString = pkg.applicationInfo.nativeLibraryRootDir;
+
+        if (DEBUG_ABI_SELECTION) {
+            Slog.d(TAG, "Abis for package[" + pkg.packageName + "] are" +
+                    " primary=" + pkg.applicationInfo.primaryCpuAbi +
+                    " secondary=" + pkg.applicationInfo.secondaryCpuAbi);
+        }
+
+        // SIDE EFFECTS; removes DEX files from disk; move elsewhere
+        if ((scanFlags & SCAN_BOOTING) == 0 && pkgSetting.sharedUser != null) {
+            // We don't do this here during boot because we can do it all
+            // at once after scanning all existing packages.
+            //
+            // We also do this *before* we perform dexopt on this package, so that
+            // we can avoid redundant dexopts, and also to make sure we've got the
+            // code and package path correct.
+            adjustCpuAbisForSharedUserLPw(pkgSetting.sharedUser.packages, pkg);
+        }
+
+        if (mFactoryTest && pkg.requestedPermissions.contains(
+                android.Manifest.permission.FACTORY_TEST)) {
+            pkg.applicationInfo.flags |= ApplicationInfo.FLAG_FACTORY_TEST;
+        }
+
+        if (isSystemApp(pkg)) {
+            pkgSetting.isOrphaned = true;
+        }
+
+        // 更新安装时间
+        // Take care of first install / last update times.
+        final long scanFileTime = getLastModifiedTime(pkg, scanFile);
+        if (currentTime != 0) {
+            if (pkgSetting.firstInstallTime == 0) {
+                pkgSetting.firstInstallTime = pkgSetting.lastUpdateTime = currentTime;
+            } else if ((scanFlags & SCAN_UPDATE_TIME) != 0) {
+                pkgSetting.lastUpdateTime = currentTime;
+            }
+        } else if (pkgSetting.firstInstallTime == 0) {
+            // We need *something*.  Take time time stamp of the file.
+            pkgSetting.firstInstallTime = pkgSetting.lastUpdateTime = scanFileTime;
+        } else if ((policyFlags & PackageParser.PARSE_IS_SYSTEM_DIR) != 0) {
+            if (scanFileTime != pkgSetting.timeStamp) {
+                // A package on the system image has changed; consider this
+                // to be an update.
+                pkgSetting.lastUpdateTime = scanFileTime;
+            }
+        }
+        pkgSetting.setTimeStamp(scanFileTime);
+
+        if ((scanFlags & SCAN_CHECK_ONLY) != 0) {
+            if (nonMutatedPs != null) {
+                synchronized (mPackages) {
+                    mSettings.mPackages.put(nonMutatedPs.name, nonMutatedPs);
+                }
+            }
+        } else {
+            final int userId = user == null ? 0 : user.getIdentifier();
+            // Modify state for the given package setting
+            // 该方法回设置很多东西包括services,providers,
+            // 更新lib时杀掉依赖此lib的进程
+            // 对framework-res.apk单独处理
+            //更新设置apk的provider并更新到数据中
+            // 广播接受者receivers,activities,permissionGroups,permissions,Instrumentation信息
+            commitPackageSettings(pkg, pkgSetting, user, scanFlags
+                    (policyFlags & PackageParser.PARSE_CHATTY) != 0 /*chatty*/);
+            if (pkgSetting.getInstantApp(userId)) {
+                mInstantAppRegistry.addInstantAppLPw(userId, pkgSetting.appId);
+            }
+        }
+        return pkg;
+    }
+```
+scanPackageDirtyLI流程总结如下：  
+
+- framework-res.apk单独处理   
+- 初始化代码路径和资源路径  
+- 创建共享库  
+- 验证签名信息的合法性  
+- 验证新的包的Provider不会与现有包冲突  
+- 是否需要获得其他包的权限  
+- 确定进程名称  
+- Lib库的更新设置操作等  
+- 跟新Settings参数  
+- 更新安装的时间  
+- 四大组件、权限、Instrumentation、把解析的这些信息注册到PMS  
+
+当然上面有不少是在commitPackageSettings方法中实现的.  
+到此apk就安装完成了,在PackageManagerService的构造方法.接下来的方法就是使用一下两个方法把
+// 为申请了特定的资源访问权限的应用程序分配相应的Linux用户组ID
+`updatePermissionsLPw(null, null, StorageManager.UUID_PRIVATE_INTERNAL, updateFlags);`
+// 将前面获取到的应用程序安装信息保存在本地的一个配置文件中，以便下一次再安装这些应用程序时
+// 可以将需要保持一致的应用程序信息恢复回来
+`mSettings.writeLPr();`
