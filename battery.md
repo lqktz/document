@@ -101,18 +101,20 @@
                     mUsageList.add(app);
                 }
 
-                if (uid == 0) {
-                    osSipper = app;// root 用户耗电,
+                if (uid == 0) {// 如果这次统计的是OS的耗电,那么初始化变量osSipper
+                    osSipper = app;
                 }
             }
         }
 
-        if (osSipper != null) {//app之外的耗电
+        // osSipper被初始化过,也就是上面统计的uid里面有系统的uid,下面把系统的耗电累加起来
+        if (osSipper != null) {// 长时间cpu唤醒,但是屏幕没有亮,该部分的耗算入OS耗电
             // The device has probably been awake for longer than the screen on
             // time and application wake lock time would account for.  Assign
             // this remainder to the OS, if possible.
             mWakelockPowerCalculator.calculateRemaining(osSipper, mStats, mRawRealtimeUs,
                     mRawUptimeUs, mStatsType);
+            // OS耗电求和
             osSipper.sumPower();
         }
     }
@@ -228,7 +230,9 @@
 ```
 cpu耗电的计算公式:  
 cpuPower = ratio_1 * cpu_time * cpu_ratio_1_power + … +ratio_n * cpu_time * cpu_ratio_n_power  
-其中： ratio_i = cpu_speed_time/ cpu_speeds_total_time，（i=1,2,…,N，N为CPU频点个数）
+其中： ratio_i = cpu_speed_time/ cpu_speeds_total_time，（i=1,2,…,N，N为CPU频点个数）  
+
+
 #### 1.2 wakeup耗电统计  
 统计唤醒机制导致的耗电
 WakelockPowerCalculator->calculateApp()
@@ -238,15 +242,19 @@ WakelockPowerCalculator->calculateApp()
         mPowerWakelock = profile.getAveragePower(PowerProfile.POWER_CPU_AWAKE);
     }
 
+    // 计算app在cpu处于awake状态下的耗电量
     @Override
     public void calculateApp(BatterySipper app, BatteryStats.Uid u, long rawRealtimeUs,
                              long rawUptimeUs, int statsType) {
         long wakeLockTimeUs = 0;
         final ArrayMap<String, ? extends BatteryStats.Uid.Wakelock> wakelockStats =
                 u.getWakelockStats();
+
         // 唤醒锁的状态的次数
         final int wakelockStatsCount = wakelockStats.size();
-        for (int i = 0; i < wakelockStatsCount; i++) {// 把是PARTIAL_WAKE_LOCK的时间统计出来
+
+        // 将每次唤醒中以PARTIAL_WAKE_LOCK方式唤醒的时间统计出来
+        for (int i = 0; i < wakelockStatsCount; i++) {
             final BatteryStats.Uid.Wakelock wakelock = wakelockStats.valueAt(i);
 
             // Only care about partial wake locks since full wake locks
@@ -257,6 +265,7 @@ WakelockPowerCalculator->calculateApp()
                 wakeLockTimeUs += timer.getTotalTimeLocked(rawRealtimeUs, statsType);
             }
         }
+
         // 时间单位转换
         app.wakeLockTimeMs = wakeLockTimeUs / 1000; // convert to millis
         mTotalAppWakelockTimeMs += app.wakeLockTimeMs;
@@ -271,7 +280,7 @@ WakelockPowerCalculator->calculateApp()
     }
 
     @Override
-    // 统计app之外的耗电量,
+    // 统计app之外的耗电量,长时间就是cpu被唤醒,但是屏幕没有亮的耗电,该部分的耗电会被算入OS
     public void calculateRemaining(BatterySipper app, BatteryStats stats, long rawRealtimeUs,
                                    long rawUptimeUs, int statsType) {
         long wakeTimeMillis = stats.getBatteryUptime(rawUptimeUs) / 1000;// 返回当前电池正常运行时间
@@ -288,13 +297,20 @@ WakelockPowerCalculator->calculateApp()
             app.wakeLockPowerMah += power;
         }
     }
-
-    @Override
-    public void reset() {
-        mTotalAppWakelockTimeMs = 0;
-    }
-
 ```
+PowerProfile.POWER_CPU_AWAKE:  
+```xml
+    <item name="cpu.awake">21.1</item>
+```
+计算公式:  
+app wakeLock耗电计算公式:  
+wakeLockPowerMah = (app.wakeLockTimeMs * mPowerWakelock) / (10006060);  
+OS wakeLock耗电计算公式:  
+power = (wakeTimeMillis * mPowerWakelock) / (1000*60*60);  
+
+其中: wakeTimeMillis是排除亮屏幕 和 app wakeLock 时间的电池总运行时间.  
+calculateRemaining统计的部分耗电会算入系统总耗电.  
+
 #### 1.3 radio耗电统计  
 ```
     /**
@@ -658,6 +674,7 @@ gpsPowerMah = (app.gpsTimeMs * mGpsPowerOn) / (1000* 60* 60);
 sensorPowerMah = ∑ (sensorTime * s.getPower()) / (1000*60*60);
 
 #### 1.7 Camera耗电统计
+此块耗电并没有算入之前定义的DrainType.CAMERA.不知道google是还没完善还是处于什么考虑
 ```
     public CameraPowerCalculator(PowerProfile profile) {
         mCameraPowerOnAvg = profile.getAveragePower(PowerProfile.POWER_CAMERA);
@@ -669,6 +686,7 @@ sensorPowerMah = ∑ (sensorTime * s.getPower()) / (1000*60*60);
 
         // Calculate camera power usage.  Right now, this is a (very) rough estimate based on the
         // average power usage for a typical camera application.
+        // 用Camera打开的时间 * 单位时间功耗
         final BatteryStats.Timer timer = u.getCameraTurnedOnTimer();
         if (timer != null) {
             final long totalTime = timer.getTotalTimeLocked(rawRealtimeUs, statsType) / 1000;
@@ -680,20 +698,64 @@ sensorPowerMah = ∑ (sensorTime * s.getPower()) / (1000*60*60);
         }
     }
 ```
+PowerProfile.POWER_CAMERA:  
+```xml
+    <item name="camera.avg">401.2</item>
+```
+计算公式:  
+cameraPowerMah = (totalTime * mCameraPowerOnAvg) / (1000 * 60 * 60)  
 
+#### 1.8 Flashlight耗电统计
+该耗电并没有算入DrainType.FLASHLIGHT.情况同Camera.统计闪光灯模块耗电,eg:拍照闪光灯,手电筒
+```java
+    public FlashlightPowerCalculator(PowerProfile profile) {
+        mFlashlightPowerOnAvg = profile.getAveragePower(PowerProfile.POWER_FLASHLIGHT);
+    }
 
+    @Override
+    public void calculateApp(BatterySipper app, BatteryStats.Uid u, long rawRealtimeUs,
+                             long rawUptimeUs, int statsType) {
 
+        // Calculate flashlight power usage.  Right now, this is based on the average power draw
+        // of the flash unit when kept on over a short period of time.
+        // android 中亮度只有一个,iOS中有多个,所以这里就是: 时间 * 单位耗电
+        final BatteryStats.Timer timer = u.getFlashlightTurnedOnTimer();
+        if (timer != null) {
+            final long totalTime = timer.getTotalTimeLocked(rawRealtimeUs, statsType) / 1000;
+            app.flashlightTimeMs = totalTime;
+            app.flashlightPowerMah = (totalTime * mFlashlightPowerOnAvg) / (1000*60*60);
+        } else {
+            app.flashlightTimeMs = 0;
+            app.flashlightPowerMah = 0;
+        }
+    }
+```
+PowerProfile.POWER_FLASHLIGHT:  
+```xml
+    <item name="camera.flashlight">239.6</item>
+```
+计算公式:  
+flashlightPowerMah = (totalTime * mFlashlightPowerOnAvg) / (1000*60*60)  
 
-
-
-
-
-
-
-
-
+#### 1.9 OS耗电
+统计的过程中用osSipper保存系统耗电
+```
+        // osSipper被初始化过,也就是上面统计的uid里面有系统的uid,下面把系统的耗电累加起来
+        if (osSipper != null) {// 长时间cpu唤醒,但是屏幕没有亮,该部分的耗算入OS耗电
+            // The device has probably been awake for longer than the screen on
+            // time and application wake lock time would account for.  Assign
+            // this remainder to the OS, if possible.
+            // 该部分在上面分析过
+            mWakelockPowerCalculator.calculateRemaining(osSipper, mStats, mRawRealtimeUs,
+                    mRawUptimeUs, mStatsType);
+            // OS耗电求和
+            osSipper.sumPower();
+        }
+```
 
 值得注意的是app的耗电,没有统计屏幕耗电.
+
+***
 
 ### 2 硬件电量统计  
 ####  BatteryStatsHelper.java-->processMiscUsage()
@@ -713,6 +775,34 @@ sensorPowerMah = ∑ (sensorTime * s.getPower()) / (1000*60*60);
     }
 ```
 #### 2.1 user耗电统计  
+属于BatterySipper.DrainType.USER
+```
+    private void addUserUsage() {
+        for (int i = 0; i < mUserSippers.size(); i++) {
+            final int userId = mUserSippers.keyAt(i);
+            BatterySipper bs = new BatterySipper(DrainType.USER, null, 0);
+            bs.userId = userId;
+            // 将每个user用户的耗电求和
+            aggregateSippers(bs, mUserSippers.valueAt(i), "User");
+            mUsageList.add(bs);
+        }
+    }
+```
+aggregateSippers:  
+```
+    private void aggregateSippers(BatterySipper bs, List<BatterySipper> from, String tag) {
+        for (int i = 0; i < from.size(); i++) {
+            BatterySipper wbs = from.get(i);
+            if (DEBUG) Log.d(TAG, tag + " adding sipper " + wbs + ": cpu=" + wbs.cpuTimeMs);
+            bs.add(wbs);
+        }
+        bs.computeMobilemspp();
+        bs.sumPower();
+    }
+```
+计算公式:  
+user_power = user_1_power + user_2_power + … +　user_n_power; (n为所有的user的总数)  
+
 #### 2.2 Phone耗电统计  
 属于:BatterySipper.DrainType.PHONE.计算通话耗电量
 ```
@@ -902,8 +992,79 @@ mWifiPowerOn:
 ```
 也就是说bluetooth.active 和 bluetooth.on并没有使用.那么岂不是bluetooth耗电是0?  
 不是的,在统计app耗电的时候,当app的uid是Process.BLUETOOTH_UID就将其耗电计入到mBluetoothSippers.统计bluetooth耗电就将这些值求和.
-后续该模块google可能还要修改.
+后续该模块google可能还要修改.  
+
 #### 2.6 内存耗电统计  
+属于BatterySipper.DrainType.MEMORY,这部分是android O才添加的
+```
+    private void addMemoryUsage() {
+        BatterySipper memory = new BatterySipper(DrainType.MEMORY, null, 0);
+        mMemoryPowerCalculator.calculateRemaining(memory, mStats, mRawRealtimeUs, mRawUptimeUs,
+                mStatsType);
+        // 汇总一下,和os耗电统计的sumPower()是同一个方法
+        memory.sumPower();
+        // 添加到app耗电的列表中
+        if (memory.totalPowerMah > 0) {
+            mUsageList.add(memory);
+        }
+```
+MemoryPowerCalculator.calculateRemaining():  
+```
+    public MemoryPowerCalculator(PowerProfile profile) {
+        int numBuckets = profile.getNumElements(PowerProfile.POWER_MEMORY);
+        powerAverages = new double[numBuckets];
+        for (int i = 0; i < numBuckets; i++) {// 4g只有一个等级
+            powerAverages[i] = profile.getAveragePower(PowerProfile.POWER_MEMORY, i);
+            if (powerAverages[i] == 0 && DEBUG) {
+                Log.d(TAG, "Problem with PowerProfile. Received 0 value in MemoryPowerCalculator");
+            }
+        }
+    }
+
+    // app使用Memory的耗电还是空方法,看来google在耗电统计方面还在做努力
+    @Override
+    public void calculateApp(BatterySipper app, BatteryStats.Uid u, long rawRealtimeUs,
+            long rawUptimeUs, int statsType) {}
+
+    // 计算Memory的耗电
+    @Override
+    public void calculateRemaining(BatterySipper app, BatteryStats stats, long rawRealtimeUs,
+            long rawUptimeUs, int statsType) {
+        double totalMah = 0;
+        long totalTimeMs = 0;
+        // 获取kernel使用memery耗电的时间片段统计
+        LongSparseArray<? extends BatteryStats.Timer> timers = stats.getKernelMemoryStats();
+        for (int i = 0; i < timers.size() && i < powerAverages.length; i++) {
+            // 获取单位时间片段的单位耗电
+            double mAatRail = powerAverages[(int) timers.keyAt(i)];
+            // 获取该时间片段的时长
+            long timeMs = timers.valueAt(i).getTotalTimeLocked(rawRealtimeUs, statsType);
+            double mAm = (mAatRail * timeMs) / (1000*60);
+            if(DEBUG) {
+                Log.d(TAG, "Calculating mAh for bucket " + timers.keyAt(i) + " while unplugged");
+                Log.d(TAG, "Converted power profile number from "
+                        + powerAverages[(int) timers.keyAt(i)] + " into " + mAatRail);
+                Log.d(TAG, "Calculated mAm " + mAm);
+            }
+            totalMah += mAm/60;
+            totalTimeMs += timeMs;
+        }
+        app.usagePowerMah = totalMah;
+        app.usageTimeMs = totalTimeMs;
+        if (DEBUG) {
+            Log.d(TAG, String.format("Calculated total mAh for memory %f while unplugged %d ",
+                    totalMah, totalTimeMs));
+        }
+```
+PowerProfile.POWER_MEMORY:  
+```xml
+    <array name="memory.bandwidths">
+        <value>22.7</value>
+    </array>
+```
+计算公式:  
+totalMah = ∑ (mAatRail * timeMs) / (1000*60)  
+
 #### 2.7 手机空闲耗电统计  
 统计的是基准功率的功耗,统计cpu在idle和awake的情况下,处于低电量状态时,只有idle状态的耗电,
 ```
@@ -973,7 +1134,7 @@ idlePower = (idleTimeMs * cpuIdlePower + awakeTimeMs * cpuAwakePower) / (60* 60*
             }
             power += p;
             signalTimeMs += strengthTimeMs;
-            if (i == 0) {// 第一个是没有信号的时间长度(none)
+            if (i == 0) {// i = 0是代表没有信号的时间长度(none)
                 noCoverageTimeMs = strengthTimeMs;
             }
         }
