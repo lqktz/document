@@ -119,6 +119,28 @@
         }
     }
 ```
+其中mStatsType 定义为:
+```
+   private int mStatsType = BatteryStats.STATS_SINCE_CHARGED;
+```
+表明是从上次充满电算起,实测中表明,充满电要拔掉充电线才清零开始算.  
+mStatsType的状态有三种,下面的定义来自BatteryStats.java  
+```
+    /**
+     * Include all of the data in the stats, including previously saved data.
+     */
+    public static final int STATS_SINCE_CHARGED = 0;
+
+    /**
+     * Include only the current run in the stats.
+     */
+    public static final int STATS_CURRENT = 1;
+
+    /**
+     * Include only the run since the last time the device was unplugged in the stats.
+     */
+    public static final int STATS_SINCE_UNPLUGGED = 2;
+```
 ##### 1.1cpu耗电计算  
 `frameworks/base/core/java/com/android/internal/os/CpuPowerCalculator.java`  
 ```
