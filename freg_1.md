@@ -1,6 +1,8 @@
 # Android 内核添加驱动
 
-系列文章按照罗升阳大神的blog进行实践.向罗大神致敬!
+学习知识,光说不练假把式.系列文章按照罗升阳大神的blog进行实践.向罗大神致敬!实现的是在从驱动层,HAL层,系统添加,JNI方法添加,AIDL方法添加,配置SELinux策略.
+由于android版本的差异,部分代码和配置需要修改,kernel和android源码版本不一样才能出错,这样才有试错,学习成长的机会.本文是参看<<Android系统源代码情景分析(修订版)>>
+以及罗大神的blog和其他网友的blog而来.
 
 平台: Android N + kernel 3.18 + MTK
 ```
@@ -400,4 +402,4 @@ proc/freg
 sys/class/freg
 dev/freg
 ```
-dev查看需要root权限,可以先把机器root.
+dev查看需要root权限,可以先把机器root.dev目录下的访问需要权限,实现在添加HAL以及add到system_server时也会遇到SELinux的限制.这些在后续的相关文章有介绍.
