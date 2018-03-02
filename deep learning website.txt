@@ -1,0 +1,21 @@
+PCA:
+http://www.cnblogs.com/fuleying/p/4458439.html
+梯度下降法:
+https://www.cnblogs.com/pinard/p/5970503.html
+矩阵求导:
+http://blog.csdn.net/u010976453/article/details/54381248
+激活函数:
+https://www.cnblogs.com/steven-yang/p/6357775.html
+https://www.zhihu.com/question/67366051
+激活函数在神经网络里面的作用:
+https://zhuanlan.zhihu.com/p/25279356
+梯度消失与梯度爆炸
+http://blog.csdn.net/weixin_37933986/article/details/69255863
+仿射变换:
+https://www.zhihu.com/question/20666664
+tensorflow CNN优质blog 所有层+概述+典型网络+code:
+http://blog.csdn.net/cxmscb/article/details/71023576
+为什么ReLu:
+https://www.cnblogs.com/yangmang/p/7477802.html
+Batch Normalization:
+https://www.zhihu.com/question/38102762
