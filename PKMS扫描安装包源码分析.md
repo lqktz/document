@@ -1,16 +1,22 @@
-#PackageManagerService 源码分析
+#PackageManagerService 源码扫描安装包分析
 
-平台:android O源码  
+**平台:android 8.0 源码**  
+***
 本文分析的问题:  
 apk的安装有如下四种方式：  
-1. apk随着PMS的启动而安装(本文)  
-2. adb install安装  
-3. ODM内置商店静默安装  
-4. 拷贝apk到手机，界面安装  
+
+- apk随着PMS的启动而安装(本文)  
+- adb install安装  
+- ODM内置商店静默安装  
+- 拷贝apk到手机，界面安装  
+
 这四种方式在代码里的实现其实就是如下两种：  
-1. PMS调用scanDirLI扫描安装(本文分析的方式)  
-2. 直接或间接调用installPackageAsUser安装  
+
+- PMS调用scanDirLI扫描安装(本文分析的方式)  
+- 直接或间接调用installPackageAsUser安装  
+
 ***
+
 在systemserver的分析过程中,在startBootstrapServices()中启动PMS是通过调用PackageManagerService.main()启动了PMS服务的,本文接着从这开始分析.  
 `frameworks/base/services/core/java/com/android/server/pm/PackageManagerService.java`
 ```
@@ -112,7 +118,6 @@ apk的安装有如下四种方式：
                 ApplicationInfo.FLAG_SYSTEM, ApplicationInfo.PRIVATE_FLAG_PRIVILEGED);
         mSettings.addSharedUserLPw("android.uid.shell", SHELL_UID,
                 ApplicationInfo.FLAG_SYSTEM, ApplicationInfo.PRIVATE_FLAG_PRIVILEGED);
-
 ```
 用到了Settings类的方法:addSharedUserLPw,作用是添加共享用户:  
 ```
