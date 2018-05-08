@@ -141,14 +141,8 @@ gg=G
 
 set shiftwidth=4 //设置缩进宽度为4
 
-# SELinux 
-源类型.te
-avc: denied  { 操作权限  }  for pid=7201  comm=“进程名”  scontext=u:r:源类型:s0  tcontext=u:r:目标类型:s0  tclass=访问类型 permissive=0
-格式：allow  源类型 目标类型:访问类型 {操作权限};
-eg:
-avc: denied {getattr read} for pid=7201 comm="xxx.xxx" scontext=u:r:system_app:s0 tcontext=u:r:shell_data_file:s0 tclass=dir permissive=0
-在system_app.te文件中，添加下面语句：
-allow system_app shell_data_file:dir {getattr read};
+
+
 
 
 
