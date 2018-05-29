@@ -149,6 +149,7 @@ DeviceIdleController中实现,并且通知其他相关注册了AppIdleStateChang
 - 在除ACTIVE以外的所有状态中，检测到打断的行为如亮屏、插入充电器，位置的改变等状态就会回到ACTIVE，重新开始下一个轮回。 
 
 状态转换如下:
+
 ![doze_stateMachine](https://raw.githubusercontent.com/lqktz/document/master/res/doze_mode_state.png)
 
 
