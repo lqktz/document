@@ -49,7 +49,8 @@ cc_defaults {
 
 ### 1.2 androidmk命令
 如果要转化的Android.mk内容没有流控制,可以使用Androidmk命令直接转换.
-该命令在:`soong/host/linux-x86/bin/androidmk`,使用方法:
+该命令在:`out/soong/host/linux-x86/bin/androidmk`,使用方法:
+
 ```
 androidmk Android.mk > Android.bp
 ```
