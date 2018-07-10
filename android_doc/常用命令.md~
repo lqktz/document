@@ -56,13 +56,13 @@ adb shell setprop debug.hwui.overdraw false
 5.在任何目录下都可以执行apktool命令;
 eg: apktool d xxx.apk
 
-# dumpsys
+#dumpsys
 #查看支持的查询项目
 adb shell dumpsys -l
 adb shell service list
 adb shell dumpsys meminfo -t 30 // 设置dump时间,dump meninfo
 
-# activity
+#activity
 adb shell dumpsys activity a/s/p com.sina.weibo
 
 adb shell dumpsys activity top //当前界面app状态
@@ -77,10 +77,6 @@ adb shell dumpsys window //查询WMS服务相关信息
 adb shell dumpsys cpuinfo //查询CPU情况
 adb shell dumpsys meminfo //查询内存情况
 adb shell dumpsys window | grep -i focus //获取焦点窗口
-
-# 检查service
-adb shell service check phone // 检查是否存在一个叫phone的服务
-adb shell service list
 
 #dd
 dd if=system.img of=syshead.img count=700 bs=4k
@@ -172,6 +168,7 @@ cat file_name | grep -i <count_string> | wc -l
 :m,ns/\<字符串\>//gn
 统计打开文件全文的单词频次
 :%s/字符串//ng
+
 
 
 
