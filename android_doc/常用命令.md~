@@ -239,21 +239,3 @@ adb shell am start -W com.android.settings/MainActivity
 ThisTime:最后一个启动的Activity的启动耗时；
 TotalTime:自己的所有Activity的启动耗时；
 WaitTime: ActivityManagerService启动App的Activity时的总时间（包括当前Activity的onPause()和自己Activity的启动）。
-
-# framework 获取调用app的uid,pid
-java里边可以使用
-
-        int pid = Binder.getCallingPid();
-        int uid = Binder.getCallingUid();
-        String callingApp = mContext.getPackageManager().getNameForUid(uid);
-
-
-C++里边可以使用
-
-          IPCThreadState::self()->getCallingPid();
-          IPCThreadState::self()->getCallingUid());
-
-# 打印堆栈
-## java 
-Exception e = new Exception("this is a log");
-e.printStackTrace();
