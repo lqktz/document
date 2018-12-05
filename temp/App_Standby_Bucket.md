@@ -111,6 +111,7 @@ public @StandbyBuckets int getAppStandbyBucket() {
     return STANDBY_BUCKET_ACTIVE;
 }
 ```
+
 从代码里显示,通过`mService`(对应的是UsageStatsService, 源码在`AOSP/frameworks/base/services/usage/java/com/android/server/usage/UsageStatsService.java`),
 获取the calling app的所在分组,如果获取失败,就返回`STANDBY_BUCKET_ACTIVE`, 也就是认为应用是活跃的,不会对其进行限制.从源码角度,我们看到app侧只能查看自身所
 处的分组,而不能查看其他分组.
@@ -127,6 +128,7 @@ public @StandbyBuckets int getAppStandbyBucket() {
 ```
 
 获取所有的应用的分组:
+
 ```
 am get-standby-bucket
 ```
@@ -170,6 +172,7 @@ active|working_set|frequent|rare 分别对应 10|20|30|40 , 至于里面不是�
 中都有调用到.
 
 在NotificationManagerService中的调用;
+
 ```
     private UsageStatsManagerInternal mAppUsageStats;
 
@@ -186,6 +189,7 @@ UsageStatsManagerInternal mUsageStatsService;
 mUsageStatsService.reportEvent(component.realActivity, component.userId,
                                         UsageEvents.Event.MOVE_TO_FOREGROUND);
 ```
+
 这里我们以ActivityManagerService的调用为分析线路.
 
 来看`frameworks/base/core/java/android/app/usage/UsageStatsManagerInternal.java` :
@@ -263,6 +267,7 @@ private final class LocalService extends UsageStatsManagerInternal {
 
 }
 ```
+
 `mHandler.obtainMessage(MSG_REPORT_EVENT, userId, 0, event).sendToTarget()`, 调用到:
 
 ```
@@ -291,7 +296,7 @@ void reportEvent(UsageEvents.Event event, int userId) {
 
         final UserUsageStatsService service =
             getUserDataAndInitializeIfNeededLocked(userId, timeNow);
-        service.reportEvent(event);
+        service.reportEvent(event); //　检查app的bucket，详见2.3
 
         // NOTE: Bug #627645 low power Feature BEG-->
         if (mPowerControllerHelper != null) {
@@ -316,6 +321,7 @@ void reportEvent(UsageEvents.Event event, int userId) {
 
 `mAppStandby.reportEvent`, 就调用到 `frameworks/base/services/usage/java/com/android/server/usage/AppStandbyController.java`
 AppStandbyController是应用分组功能的核心部件,用于控制应用分组的, 系统默认的动态分组的规则就在该部件中.
+
 ```
 void reportEvent(UsageEvents.Event event, long elapsedRealtime, int userId) {                                                                
     if (!mAppIdleEnabled) return; // mAppIdleEnabled 是使能应用分组功能的开关,默认是true
@@ -376,7 +382,17 @@ void reportEvent(UsageEvents.Event event, long elapsedRealtime, int userId) {
     }
 }
 ```
-接下来的重点就是在处理`MSG_CHECK_PACKAGE_IDLE_STATE`, 
+
+接下来的重点就是在处理`MSG_CHECK_PACKAGE_IDLE_STATE`:
+
+```
+                case MSG_CHECK_PACKAGE_IDLE_STATE:
+                        checkAndUpdateStandbyState((String) msg.obj, msg.arg1, msg.arg2,
+                                   mInjector.elapsedRealtime());
+```
+
+调用了checkAndUpdateStandbyState方法:
+
 ```
     /** Check if we need to update the standby state of a specific app. */
     private void checkAndUpdateStandbyState(String packageName, @UserIdInt int userId,
@@ -396,7 +412,7 @@ void reportEvent(UsageEvents.Event event, long elapsedRealtime, int userId) {
             // 通知监听者, 这是一个豁免的package
             maybeInformListeners(packageName, userId, elapsedRealtime,
                     STANDBY_BUCKET_EXEMPTED, REASON_MAIN_DEFAULT, false);
-        } else {
+        } else { // 没有在白名单里的app走的分支
             synchronized (mAppIdleLock) {
                 final AppIdleHistory.AppUsageHistory app =
                     mAppIdleHistory.getAppUsageHistory(packageName,
@@ -406,10 +422,12 @@ void reportEvent(UsageEvents.Event event, long elapsedRealtime, int userId) {
 
                 // If the bucket was forced by the user/developer, leave it alone.
                 // A usage event will be the only way to bring it out of this forced state
+                // 如果的bucket的设置原因是被用户或者开发者,强制设置的,将不会改变它的组别
                 if (oldMainReason == REASON_MAIN_FORCED) {
                     return;
                 }
                 final int oldBucket = app.currentBucket;
+                // 动态调整buncket, 最高等级只能设置到 10 , 也就是STANDBY_BUCKET_ACTIVE
                 int newBucket = Math.max(oldBucket, STANDBY_BUCKET_ACTIVE); // Undo EXEMPTED
                 boolean predictionLate = predictionTimedOut(app, elapsedRealtime);
                 // Compute age-based bucket
@@ -425,9 +443,11 @@ void reportEvent(UsageEvents.Event event, long elapsedRealtime, int userId) {
                         if (DEBUG) {
                             Slog.d(TAG, "Restored predicted newBucket = " + newBucket);
                         }
-                    } else {
+                    } else { 
+                        // 获取package应该在的新组, 这里不是当前的组, 而是将来的应该在的组别
+                        // getBucketForLocked 是一个核心的方法
                         newBucket = getBucketForLocked(packageName, userId,
-                                elapsedRealtime); // 获取package应该在的新组
+                                elapsedRealtime);
                         if (DEBUG) {
                             Slog.d(TAG, "Evaluated AOSP newBucket = " + newBucket);
                         }
@@ -459,8 +479,8 @@ void reportEvent(UsageEvents.Event event, long elapsedRealtime, int userId) {
                     Slog.d(TAG, "     Old bucket=" + oldBucket
                             + ", newBucket=" + newBucket);
                 }
-                if (oldBucket < newBucket || predictionLate) {
-                    mAppIdleHistory.setAppStandbyBucket(packageName, userId,
+                if (oldBucket < newBucket || predictionLate) { // 注意 这里的oldBucket < newBucket, 说明新的组是降优先级的组别
+                    mAppIdleHistory.setAppStandbyBucket(packageName, userId, // 设置新的bucket
                             elapsedRealtime, newBucket, reason);
                     maybeInformListeners(packageName, userId, elapsedRealtime,
                             newBucket, reason, false);
@@ -470,22 +490,225 @@ void reportEvent(UsageEvents.Event event, long elapsedRealtime, int userId) {
     }
 ```
 
+checkAndUpdateStandbyState 方法的作用就是,找出真正需要设置新的buncket的app,然后调用getBucketForLocked,获取新的bucket名称,
+再调用mAppIdleHistory.setAppStandbyBucket 改变package的bucket, 并通知所有的监听者.
+
+在这个方法里, 还要继续探究的就是getBucketForLocked 方法:
+
+```
+/**
+ * Evaluates next bucket based on time since last used and the bucketing thresholds.
+ * @param packageName the app
+ * @param userId the user
+ * @param elapsedRealtime as the name suggests, current elapsed time
+ * @return the bucket for the app, based on time since last used
+ */
+@GuardedBy("mAppIdleLock")
+@StandbyBuckets int getBucketForLocked(String packageName, int userId,
+        long elapsedRealtime) {
+    int bucketIndex = mAppIdleHistory.getThresholdIndex(packageName, userId,
+            elapsedRealtime, mAppStandbyScreenThresholds, mAppStandbyElapsedThresholds);
+    return THRESHOLD_BUCKETS[bucketIndex];
+}
+```
+
+THRESHOLD_BUCKETS的定义如下:
+
+```
+static final int[] THRESHOLD_BUCKETS = {
+    STANDBY_BUCKET_ACTIVE,
+    STANDBY_BUCKET_WORKING_SET,
+    STANDBY_BUCKET_FREQUENT,
+    STANDBY_BUCKET_RARE
+};
+```
+
+从mAppIdleHistory.getThresholdIndex获取一个index,让后在THRESHOLD_BUCKETS查找到对应的组别.在`getThresholdIndex(
+packageName, userId, elapsedRealtime, mAppStandbyScreenThresholds, mAppStandbyElapsedThresholds);`中,有两个Threshold:
+`mAppStandbyScreenThresholds` 和 `mAppStandbyElapsedThresholds` :
+
+```
+long[] mAppStandbyScreenThresholds = SCREEN_TIME_THRESHOLDS;
+long[] mAppStandbyElapsedThresholds = ELAPSED_TIME_THRESHOLDS;
+
+static final boolean COMPRESS_TIME = false;
+private static final long ONE_MINUTE = 60 * 1000;
+private static final long ONE_HOUR = ONE_MINUTE * 60;
+private static final long ONE_DAY = ONE_HOUR * 24;
+
+static final long[] SCREEN_TIME_THRESHOLDS = {
+    0,
+    0,
+    COMPRESS_TIME ? 120 * 1000 : 1 * ONE_HOUR,
+    COMPRESS_TIME ? 240 * 1000 : 2 * ONE_HOUR
+};
+
+static final long[] ELAPSED_TIME_THRESHOLDS = {
+    0,
+    COMPRESS_TIME ?  1 * ONE_MINUTE : 12 * ONE_HOUR,
+    COMPRESS_TIME ?  4 * ONE_MINUTE : 24 * ONE_HOUR,
+    COMPRESS_TIME ? 16 * ONE_MINUTE : 48 * ONE_HOUR
+};
+```
+
+接下来分析getThresholdIndex函数的具体实现, 该方法在`frameworks/base/services/usage/java/com/android/server/usage/AppIdleHistory.java`:
+
+```
+/**
+ * Returns the index in the arrays of screenTimeThresholds and elapsedTimeThresholds
+ * that corresponds to how long since the app was used.
+ * @param packageName
+ * @param userId
+ * @param elapsedRealtime current time
+ * @param screenTimeThresholds Array of screen times, in ascending order, first one is 0
+ * @param elapsedTimeThresholds Array of elapsed time, in ascending order, first one is 0
+ * @return The index whose values the app's used time exceeds (in both arrays)
+ */
+int getThresholdIndex(String packageName, int userId, long elapsedRealtime,
+        long[] screenTimeThresholds, long[] elapsedTimeThresholds) {
+    ArrayMap<String, AppUsageHistory> userHistory = getUserHistory(userId);
+    AppUsageHistory appUsageHistory = getPackageHistory(userHistory, packageName,
+            elapsedRealtime, false);
+    // If we don't have any state for the app, assume never used
+    // 对于从来没有使用过的app , 就设置成最低级别的bucket, STANDBY_BUCKET_RARE
+    if (appUsageHistory == null) return screenTimeThresholds.length - 1;
+    // getScreenOnTime(elapsedRealtime) 获取设备的总亮屏时间(有记录在案的时间)
+    // appUsageHistory.lastUsedScreenTime app最后一次亮屏时间点,基于ScreenOn basetime
+    // screenOnDelta 计算出来就是app最后一次亮屏使用,到现在,已经有多久的亮屏时间
+    // getElapsedTime(elapsedRealtime) 获取是被从bron开始现在的时间
+    // appUsageHistory.lastUsedElapsedTime 基于ElapsedTime该package最后一次使用的时间点
+    // elapsedDelta 计算出来就是app最后一次使用到现在的时间点
+    long screenOnDelta = getScreenOnTime(elapsedRealtime) - appUsageHistory.lastUsedScreenTime;
+    long elapsedDelta = getElapsedTime(elapsedRealtime) - appUsageHistory.lastUsedElapsedTime;
+
+    if (DEBUG) Slog.d(TAG, packageName
+            + " lastUsedScreen=" + appUsageHistory.lastUsedScreenTime
+            + " lastUsedElapsed=" + appUsageHistory.lastUsedElapsedTime);
+    if (DEBUG) Slog.d(TAG, packageName + " screenOn=" + screenOnDelta
+            + ", elapsed=" + elapsedDelta);
+    for (int i = screenTimeThresholds.length - 1; i >= 0; i--) {
+        if (screenOnDelta >= screenTimeThresholds[i]
+                && elapsedDelta >= elapsedTimeThresholds[i]) {
+            return i;
+        }
+    }
+    return 0; // 对应STANDBY_BUCKET_ACTIVE
+}
 
 
+```
 
+计算出screenOnDelta 和 elapsedDelta ,从for循环的便利顺序来看: 
 
+- screenOnDelta超过2小时, elapsedDelta超过48小时bucket为RARE
+- screenOnDelta超过1小时, elapsedDelta超过24小时bucket为FREQUENT
+- elapsedDelta超过12小时bucket为working_set
 
-
-
-
-
-
+虽然从for循环的顺序是上面的判断顺序,但是从时间轴的角度来看,package满足了`screenOnDelta超过2小时, elapsedDelta超过48小时`,
+一定在某个时间点也会满足`screenOnDelta超过1小时, elapsedDelta超过24小时`, 在满足了`screenOnDelta超过1小时, elapsedDelta超过24小时`
+那么在某个时间点一定也就满足了elapsedDelta超过12小时. 这么来说,一个package如果是在active 的bucket, 则会先到`working_set`,再到`FREQUENT`,
+再到`RARE`.
 
 #### 2.2 获取app的bucket
 
+获取app的bucket流程比较简单:
+
+![获取app的bucket流程图](https://raw.githubusercontent.com/lqktz/document/master/res/getAppStandbyBucket.png)
+
+在`AppIdleHistory.java`中的代码如下:
+
+```
+public int getAppStandbyBucket(String packageName, int userId, long elapsedRealtime) {
+    ArrayMap<String, AppUsageHistory> userHistory = getUserHistory(userId);
+    AppUsageHistory appUsageHistory =
+        getPackageHistory(userHistory, packageName, elapsedRealtime, true);
+    return appUsageHistory.currentBucket; // 在AppUsageHistory 中获取currentBucket就是所在的组别
+}
+```
+
 #### 2.3 检查app的bucket
 
+```
+void reportEvent(UsageEvents.Event event) {
+    if (DEBUG) {
+        Slog.d(TAG, mLogPrefix + "Got usage event for " + event.mPackage
+                + "[" + event.mTimeStamp + "]: "
+                + eventToString(event.mEventType));
+    }
 
+    // 
+    if (event.mTimeStamp >= mDailyExpiryDate.getTimeInMillis()) {
+        // Need to rollover
+        rolloverStats(event.mTimeStamp);
+    }
+
+    final IntervalStats currentDailyStats = mCurrentStats[UsageStatsManager.INTERVAL_DAILY];
+
+    final Configuration newFullConfig = event.mConfiguration;
+    if (event.mEventType == UsageEvents.Event.CONFIGURATION_CHANGE &&
+            currentDailyStats.activeConfiguration != null) {
+        // Make the event configuration a delta.
+        event.mConfiguration = Configuration.generateDelta(
+                currentDailyStats.activeConfiguration, newFullConfig);
+    }
+
+    // Add the event to the daily list.
+    if (currentDailyStats.events == null) {
+        currentDailyStats.events = new EventList();
+    }
+    if (event.mEventType != UsageEvents.Event.SYSTEM_INTERACTION) {
+        currentDailyStats.events.insert(event);
+    }
+
+    boolean incrementAppLaunch = false;
+    if (event.mEventType == UsageEvents.Event.MOVE_TO_FOREGROUND) {
+        if (event.mPackage != null && !event.mPackage.equals(mLastBackgroundedPackage)) {
+            incrementAppLaunch = true;
+        }
+    } else if (event.mEventType == UsageEvents.Event.MOVE_TO_BACKGROUND) {
+        if (event.mPackage != null) {
+            mLastBackgroundedPackage = event.mPackage;
+        }
+    }
+
+    for (IntervalStats stats : mCurrentStats) {
+        switch (event.mEventType) {
+            case UsageEvents.Event.CONFIGURATION_CHANGE: {
+                 stats.updateConfigurationStats(newFullConfig, event.mTimeStamp);
+                 } break;
+            case UsageEvents.Event.CHOOSER_ACTION: {
+                 stats.updateChooserCounts(event.mPackage, event.mContentType, event.mAction);
+                 String[] annotations = event.mContentAnnotations;
+                 if (annotations != null) {
+                     for (String annotation : annotations) {
+                         stats.updateChooserCounts(event.mPackage, annotation, event.mAction);
+                     }
+                 }
+                 } break;
+            case UsageEvents.Event.SCREEN_INTERACTIVE: {
+                 stats.updateScreenInteractive(event.mTimeStamp);
+                 } break;
+            case UsageEvents.Event.SCREEN_NON_INTERACTIVE: {
+                 stats.updateScreenNonInteractive(event.mTimeStamp);
+                 } break;
+            case UsageEvents.Event.KEYGUARD_SHOWN: {
+                 stats.updateKeyguardShown(event.mTimeStamp);
+                 } break;
+            case UsageEvents.Event.KEYGUARD_HIDDEN: {
+                 stats.updateKeyguardHidden(event.mTimeStamp);
+                 } break;
+            default: {
+                 stats.update(event.mPackage, event.mTimeStamp, event.mEventType);
+                 if (incrementAppLaunch) {
+                     stats.incrementAppLaunchCount(event.mPackage);
+                 }
+                 } break;
+        }
+    }
+
+    notifyStatsChanged();
+}
+```
 
 
 
