@@ -323,8 +323,8 @@ void reportEvent(UsageEvents.Event event, int userId) {
 AppStandbyController是应用分组功能的核心部件,用于控制应用分组的, 系统默认的动态分组的规则就在该部件中.
 
 ```
-void reportEvent(UsageEvents.Event event, long elapsedRealtime, int userId) {                                                                
-    if (!mAppIdleEnabled) return; // mAppIdleEnabled 是使能应用分组功能的开关,默认是true
+void reportEvent(UsageEvents.Event event, long elapsedRealtime, int userId) {                      
+    if (!mAppIdleEnabled) return; // mAppIdleEnabled 是使能应用分组功能的开关
     synchronized (mAppIdleLock) {                                                                                                            
         // TODO: Ideally this should call isAppIdleFiltered() to avoid calling back                                                          
         // about apps that are on some kind of whitelist anyway.                                                                             
@@ -383,7 +383,51 @@ void reportEvent(UsageEvents.Event event, long elapsedRealtime, int userId) {
 }
 ```
 
-接下来的重点就是在处理`MSG_CHECK_PACKAGE_IDLE_STATE`:
+这里先说一下mAppIdleEnabled, 找到设置该值的方法:
+
+```
+void setAppIdleEnabled(boolean enabled) {
+    mAppIdleEnabled = enabled;
+}                                                                                                                            
+```
+
+调用该方法的位置:
+
+```
+// Check if app_idle_enabled has changed                                                                                                                     
+setAppIdleEnabled(mInjector.isAppIdleEnabled());                                                                                                             
+```
+
+mInjector的类型是Injector, 这是一个AppStandbyController.java里的static class,isAppIdleEnabled实现在下面:
+
+```
+boolean isAppIdleEnabled() {                                                                                                                                     
+    final boolean buildFlag = mContext.getResources().getBoolean(                                                                                                
+            com.android.internal.R.bool.config_enableAutoPowerModes);                                                                                            
+    final boolean runtimeFlag = Global.getInt(mContext.getContentResolver(),                                                                                     
+            Global.APP_STANDBY_ENABLED, 1) == 1                                                                                                                  
+        && Global.getInt(mContext.getContentResolver(),                                                                                                      
+                Global.ADAPTIVE_BATTERY_MANAGEMENT_ENABLED, 1) == 1;                                                                                                 
+    return buildFlag && runtimeFlag;                                                                                                                             
+}
+```
+mAppIdleEnabled是否为true(打开bucket功能), 要看config_enableAutoPowerModes 和 Global.ADAPTIVE_BATTERY_MANAGEMENT_ENABLED来决定.
+buildFlag获取的是资源文件里的配置config_enableAutoPowerModes, 该配置在`frameworks/base/core/res/res/values/config.xml`:
+
+```
+    <!-- Set this to true to enable the platform's auto-power-save modes like doze and                                                                                   
+    app standby.  These are not enabled by default because they require a standard                                                                                  
+    cloud-to-device messaging service for apps to interact correctly with the modes                                                                                 
+    (such as to be able to deliver an instant message to the device even when it is                                                                                 
+     dozing).  This should be enabled if you have such services and expect apps to                                                                                   
+    correctly use them when installed on your device.  Otherwise, keep this disabled                                                                                
+    so that applications can still use their own mechanisms. -->                                                                                                    
+    <bool name="config_enableAutoPowerModes">false</bool>                                                                                                                
+```
+
+ADAPTIVE_BATTERY_MANAGEMENT_ENABLED和省电模式相关, 在android P中在省电模式下,所有的后台运行的app都将受到限制.
+
+回到reportEvent的的异步消息处理,`MSG_CHECK_PACKAGE_IDLE_STATE`:
 
 ```
                 case MSG_CHECK_PACKAGE_IDLE_STATE:
@@ -402,7 +446,7 @@ void reportEvent(UsageEvents.Event event, long elapsedRealtime, int userId) {
                 UserHandle.getAppId(uid),
                 userId);
 
-        if (isSpecial) { // 对于豁免的app, 做特别的处理,设置为
+        if (isSpecial) { // 对于豁免的app, 做特别的处理
             synchronized (mAppIdleLock) {
                 // STANDBY_BUCKET_EXEMPTED 的值是5, 使用am get-standby-bucket 命令查看,
                 // 一些package显示是5,就是说明是在whitelist
@@ -628,6 +672,16 @@ public int getAppStandbyBucket(String packageName, int userId, long elapsedRealt
 
 #### 2.3 检查app的bucket
 
+在前面介绍reportEvent的过程中, 有一下一段调用:
+
+```
+    final UserUsageStatsService service =
+    getUserDataAndInitializeIfNeededLocked(userId, timeNow);
+    service.reportEvent(event); //　检查app的bucket，详见2.3
+```
+
+调用了UserUsageStatsService 的report方法:
+
 ```
 void reportEvent(UsageEvents.Event event) {
     if (DEBUG) {
@@ -636,78 +690,262 @@ void reportEvent(UsageEvents.Event event) {
                 + eventToString(event.mEventType));
     }
 
-    // 
+    // event.mTimeStamp 指该event发生的时间点,到机器开机的时间
+    // mDailyExpiryDate.getTimeInMillis() 获取的是mTime值, 该值在mDailyExpiryDate.addDays(1) 中设置为一天
+    // 此处代码逻辑是event的发生时间点在一天以上,则触发rolloverStats
     if (event.mTimeStamp >= mDailyExpiryDate.getTimeInMillis()) {
         // Need to rollover
         rolloverStats(event.mTimeStamp);
     }
 
-    final IntervalStats currentDailyStats = mCurrentStats[UsageStatsManager.INTERVAL_DAILY];
+      ......
+```
 
-    final Configuration newFullConfig = event.mConfiguration;
-    if (event.mEventType == UsageEvents.Event.CONFIGURATION_CHANGE &&
-            currentDailyStats.activeConfiguration != null) {
-        // Make the event configuration a delta.
-        event.mConfiguration = Configuration.generateDelta(
-                currentDailyStats.activeConfiguration, newFullConfig);
-    }
+rolloverStats函数中会调用loadActiveStats函数，loadActiveStats函数会调用mListener.onStatsReloaded函数，而这个mLisener正是UsageStatsService。
+而UsageStatsService的onStatsReloaded函数，是调用了AppStandbyController的postOneTimeCheckIdleStates，这个函数如下，因为这个时候已经开机，
+因此发送了一个MSG_ONE_TIME_CHECK_IDLE_STATES消息. 通过该异步消息会调用到checkIdleStates, 该方法最后会调用到checkAndUpdateStandbyState, 
+调用的方式如下:
 
-    // Add the event to the daily list.
-    if (currentDailyStats.events == null) {
-        currentDailyStats.events = new EventList();
-    }
-    if (event.mEventType != UsageEvents.Event.SYSTEM_INTERACTION) {
-        currentDailyStats.events.insert(event);
-    }
+```
+for (int i = 0; i < runningUserIds.length; i++) {                                                                                                                
+    final int userId = runningUserIds[i];                                                                                                                        
+    if (checkUserId != UserHandle.USER_ALL && checkUserId != userId) {                                                                                           
+        continue;                                                                                                                                                
+    }                                                                                                                                                            
+    if (DEBUG) {                                                                                                                                                 
+        Slog.d(TAG, "Checking idle state for user " + userId);                                                                                                   
+    }                                                                                                                                                            
+    List<PackageInfo> packages = mPackageManager.getInstalledPackagesAsUser(                                                                                     
+            PackageManager.MATCH_DISABLED_COMPONENTS,                                                                                                            
+            userId);                                                                                                                                             
+    final int packageCount = packages.size();                                                                                                                    
+    for (int p = 0; p < packageCount; p++) {                                                                                                                     
+        final PackageInfo pi = packages.get(p);                                                                                                                  
+        final String packageName = pi.packageName;                                                                                                               
+        checkAndUpdateStandbyState(packageName, userId, pi.applicationInfo.uid,                                                                                  
+                elapsedRealtime);                                                                                                                                
+    }                                                                                                                                                            
+}                                                                                                                                                                
+```
 
-    boolean incrementAppLaunch = false;
-    if (event.mEventType == UsageEvents.Event.MOVE_TO_FOREGROUND) {
-        if (event.mPackage != null && !event.mPackage.equals(mLastBackgroundedPackage)) {
-            incrementAppLaunch = true;
-        }
-    } else if (event.mEventType == UsageEvents.Event.MOVE_TO_BACKGROUND) {
-        if (event.mPackage != null) {
-            mLastBackgroundedPackage = event.mPackage;
-        }
-    }
+这是对每个用户,每个包进行checkAndUpdateStandbyState,来更新状态.
 
-    for (IntervalStats stats : mCurrentStats) {
-        switch (event.mEventType) {
-            case UsageEvents.Event.CONFIGURATION_CHANGE: {
-                 stats.updateConfigurationStats(newFullConfig, event.mTimeStamp);
-                 } break;
-            case UsageEvents.Event.CHOOSER_ACTION: {
-                 stats.updateChooserCounts(event.mPackage, event.mContentType, event.mAction);
-                 String[] annotations = event.mContentAnnotations;
-                 if (annotations != null) {
-                     for (String annotation : annotations) {
-                         stats.updateChooserCounts(event.mPackage, annotation, event.mAction);
-                     }
-                 }
-                 } break;
-            case UsageEvents.Event.SCREEN_INTERACTIVE: {
-                 stats.updateScreenInteractive(event.mTimeStamp);
-                 } break;
-            case UsageEvents.Event.SCREEN_NON_INTERACTIVE: {
-                 stats.updateScreenNonInteractive(event.mTimeStamp);
-                 } break;
-            case UsageEvents.Event.KEYGUARD_SHOWN: {
-                 stats.updateKeyguardShown(event.mTimeStamp);
-                 } break;
-            case UsageEvents.Event.KEYGUARD_HIDDEN: {
-                 stats.updateKeyguardHidden(event.mTimeStamp);
-                 } break;
-            default: {
-                 stats.update(event.mPackage, event.mTimeStamp, event.mEventType);
-                 if (incrementAppLaunch) {
-                     stats.incrementAppLaunchCount(event.mPackage);
-                 }
-                 } break;
-        }
-    }
+在AppStandbyController里的 onBootPhase 阶段也会调用postOneTimeCheckIdleStates, 这意味着,开机会检测更新一次,之后每隔一天会检测更新一次.
 
-    notifyStatsChanged();
+从代码可以看出,应用待机分组和app 是否使用android P 的 SDK 开发没有关系, 所有app, 只要是安装到android P的设备上都会受到系统的限制.
+
+## 3 应用待机模式
+
+在android M 版本上添加了Doze  和 app standby模式, 长时间没有在前台使用, app 的行为也会受到限制,
+详情可见[Optimize for Doze and App Standby](https://developer.android.google.cn/training/monitoring-device-state/doze-standby). 
+该功能就是将app设置为是否idle状态来进行限制, 处于idle状态的app 的网络,JobScheduler等都会限制住. 在android P中,由于添加了应用待机分组功能, 
+app的行为被限制的更加精细化.
+
+在P上的`AppIdleHistory.java`中的setIdle方法设置为
+
+```
+/* Returns the new standby bucket the app is assigned to */                                                                                                          
+public int setIdle(String packageName, int userId, boolean idle, long elapsedRealtime) {                                                                             
+    ArrayMap<String, AppUsageHistory> userHistory = getUserHistory(userId);                                                                                          
+    AppUsageHistory appUsageHistory = getPackageHistory(userHistory, packageName,                                                                                    
+            elapsedRealtime, true);                                                                                                                                  
+    if (idle) {                                                                                                                                                      
+        appUsageHistory.currentBucket = STANDBY_BUCKET_RARE;                                                                                                         
+        appUsageHistory.bucketingReason = REASON_MAIN_FORCED;                                                                                                        
+    } else {                                                                                                                                                         
+        appUsageHistory.currentBucket = STANDBY_BUCKET_ACTIVE;                                                                     
+        // This is to pretend that the app was just used, don't freeze the state anymore.
+        appUsageHistory.bucketingReason = REASON_MAIN_USAGE | REASON_SUB_USAGE_USER_INTERACTION;
+    }                                                                                                                                                                
+    return appUsageHistory.currentBucket;                                                                                                                            
 }
+```
+
+对比之前的android 版本的代码:
+
+```
+public void setIdle(String packageName, int userId, long elapsedRealtime) {
+    ArrayMap<String, PackageHistory> userHistory = getUserHistory(userId);
+    PackageHistory packageHistory = getPackageHistory(userHistory, packageName,
+            elapsedRealtime);
+
+    shiftHistoryToNow(userHistory, elapsedRealtime);
+
+    packageHistory.recent[HISTORY_SIZE - 1] &= ~FLAG_LAST_STATE;
+}
+```
+
+android P 已经把原来的standby 功能合并到了新添加的应用待机分组功能.如果是idle状态就是对应STANDBY_BUCKET_RARE组,
+不是idle就是STANDBY_BUCKET_ACTIVE组.
+
+## 4 限制相关源码分析
+
+### 4.1 监听的类型
+
+前面分析了大段的代码, 这些代码将不同的app分到了不同的组别, 每次更新组别, 都会去通知监听者,在 checkAndUpdateStandbyState 中,最后会调用
+maybeInformListeners 来通知监听者:
+
+```
+/** Inform listeners if the bucket has changed since it was last reported to listeners */                                                                            
+private void maybeInformListeners(String packageName, int userId,                                                                                                    
+        long elapsedRealtime, int bucket, int reason, boolean userStartedInteracting) {                                                                              
+    synchronized (mAppIdleLock) {                                                                                                                                    
+        if (mAppIdleHistory.shouldInformListeners(packageName, userId,                                                                                               
+                    elapsedRealtime, bucket)) {                                                                                                                          
+            final StandbyUpdateRecord r = StandbyUpdateRecord.obtain(packageName, userId,                                                                            
+                    bucket, reason, userStartedInteracting);                                                                                                         
+            if (DEBUG) Slog.d(TAG, "Standby bucket for " + packageName + "=" + bucket);                                                                              
+            mHandler.sendMessage(mHandler.obtainMessage(MSG_INFORM_LISTENERS, r));                                                                                   
+        }                                                                                                                                                            
+    }                                                                                                                                                                
+}                                                                                                                                                                    
+```
+
+MSG_INFORM_LISTENERS 异步消息进过调用,informListeners
+```
+case MSG_INFORM_LISTENERS:                                                                                                                               
+    StandbyUpdateRecord r = (StandbyUpdateRecord) msg.obj;                                                                                               
+    informListeners(r.packageName, r.userId, r.bucket, r.reason,                                                                                         
+        r.isUserInteraction);                                                                                                                        
+    r.recycle();                                                                                                                                         
+    break;                                                                                                                                               
+```
+
+进入informListeners: 
+
+```
+void informListeners(String packageName, int userId, int bucket, int reason,                                                                                         
+        boolean userInteraction) {                                                                                                                                   
+    // app所处的buncket的优先级在RARE以及RARE之下,标记为idle
+    final boolean idle = bucket >= STANDBY_BUCKET_RARE;                                                                                                              
+    synchronized (mPackageAccessListeners) {                                                                                                                         
+        for (AppIdleStateChangeListener listener : mPackageAccessListeners) {
+            // onAppIdleStateChanged 用于通知监听者
+            listener.onAppIdleStateChanged(packageName, userId, idle, bucket, reason);                                                                               
+            // 用户与package交互才导致的更改bucket, 则userInteraction为true,
+            if (userInteraction) {                                                                                                                                   
+                listener.onUserInteractionStarted(packageName, userId);                                                                                              
+            }                                                                                                                                                        
+        }                                                                                                                                                            
+    }                                                                                                                                                                
+}                                                                                                                                                                    
+```
+
+从mPackageAccessListeners取出listener, 调用其方法onUserInteractionStarted. 重点就在分析清楚mPackageAccessListeners的结构:
+
+```
+import android.app.usage.UsageStatsManagerInternal.AppIdleStateChangeListener;
+
+@GuardedBy("mPackageAccessListeners")                                                                                                                                
+private ArrayList<AppIdleStateChangeListener>                                                                                                                        
+mPackageAccessListeners = new ArrayList<>();                                                                                                                 
+
+void addListener(AppIdleStateChangeListener listener) {                                                                                                              
+    synchronized (mPackageAccessListeners) {                                                                                                                         
+        if (!mPackageAccessListeners.contains(listener)) {                                                                                                           
+            mPackageAccessListeners.add(listener);                                                                                                                   
+        }                                                                                                                                                            
+    }                                                                                                                                                                
+}                                                                                                                                                                    
+
+void removeListener(AppIdleStateChangeListener listener) {                                                                                                           
+    synchronized (mPackageAccessListeners) {                                                                                                                         
+        mPackageAccessListeners.remove(listener);                                                                                                                    
+    }                                                                                                                                                                
+}                                                                                                                                                                    
+```
+上面的listener, 就是AppIdleStateChangeListener 类型, 而AppIdleStateChangeListener又定义在UsageStatsManagerInternal.java中: 
+
+```
+public static abstract class AppIdleStateChangeListener {                                                                                                            
+
+    /** Callback to inform listeners that the idle state has changed to a new bucket. */                                                                             
+    public abstract void onAppIdleStateChanged(String packageName, @UserIdInt int userId,                                                                            
+            boolean idle, int bucket, int reason);                                                                                                                   
+
+    /**                                                                                                                                                              
+     * Callback to inform listeners that the parole state has changed. This means apps are                                                                           
+     * allowed to do work even if they're idle or in a low bucket.                                                                                                   
+     */                                                                                                                                                              
+    public abstract void onParoleStateChanged(boolean isParoleOn);                                                                                                   
+
+    /**                                                                                                                                                              
+     * Optional callback to inform the listener that the app has transitioned into                                                                                   
+     * an active state due to user interaction.                                                                                                                      
+     */                                                                                                                                                              
+    public void onUserInteractionStarted(String packageName, @UserIdInt int userId) {                                                                                
+        // No-op by default                                                                                                                                          
+    }                                                                                                                                                                
+}                                                                                                                                                                    
+```
+这就是个AppIdleStateChangeListener的接口, listener对应的就是其真正的实现类:
+
+- NetworkPolicyManagerService.java里的私有类AppIdleStateChangeListener
+- AlarmManagerService.java里的final类AppStandbyTracker
+- JobSchedulerService.java里的final类StandbyTracker
+
+**感觉这几个Listener不是同一个人写的, 命名不一致**
+
+从接口的实现看, package在不同的组别, 将在 Network, Alarm, JobScheduler 三个方面受到限制.接下来就从三个方面分析其源码实现.
+在`informListeners` 源码中, 调用到了`onAppIdleStateChanged` 和 `onUserInteractionStarted` 两个接口. 对于`onUserInteractionStarted`
+只有在JobScheduler中才真正的实现.`onAppIdleStateChanged` 在三个AppIdleStateChangeListener接口的实现类里都有实现.
+
+### 4.2 Network的限制
+
+`frameworks/base/services/core/java/com/android/server/net/NetworkPolicyManagerService.java` 的内部类`AppIdleStateChangeListener`定义如下:
+这个类名和抽象类的名称一样,别搞混了.
+
+```
+private class AppIdleStateChangeListener
+extends UsageStatsManagerInternal.AppIdleStateChangeListener {
+
+    @Override                                                                                                                                                        
+        public void onAppIdleStateChanged(String packageName, int userId, boolean idle, int bucket,                                                                      
+                int reason) {                                                                                                                                            
+            try {                                                                                                                                                        
+                final int uid = mContext.getPackageManager().getPackageUidAsUser(packageName,                                                                            
+                        PackageManager.MATCH_UNINSTALLED_PACKAGES, userId);                                                                                              
+                synchronized (mUidRulesFirstLock) {                                                                                                                      
+                    mLogger.appIdleStateChanged(uid, idle);                                                                                                              
+                    updateRuleForAppIdleUL(uid);                                                                                                                         
+                    updateRulesForPowerRestrictionsUL(uid);                                                                                                              
+                }                                                                                                                                                        
+            } catch (NameNotFoundException nnfe) {                                                                                                                       
+            }                                                                                                                                                            
+        }                                                                                                                                                                
+
+    @Override                                                                                                                                                        
+        public void onParoleStateChanged(boolean isParoleOn) {                                                                                                           
+            synchronized (mUidRulesFirstLock) {                                                                                                                          
+                mLogger.paroleStateChanged(isParoleOn);                                                                                                                  
+                updateRulesForAppIdleParoleUL();                                                                                                                         
+            }                                                                                                                                                            
+        }                                                                                                                                                                
+}                                                                                                                                                                    
+```
+
+### 4.3 Alarm的限制
+
+```
+/**                                                                                                                                                                  
+ * Tracking of app assignments to standby buckets                                                                                                                    
+ */                                                                                                                                                                  
+final class AppStandbyTracker extends UsageStatsManagerInternal.AppIdleStateChangeListener {                                                                         
+
+    public void onAppIdleStateChanged(final String packageName, final @UserIdInt int userId,                                                                         
+            boolean idle, int bucket, int reason) {                                                                                                                  
+        mHandler.removeMessages(AlarmHandler.APP_STANDBY_BUCKET_CHANGED);                                                                                            
+        mHandler.obtainMessage(AlarmHandler.APP_STANDBY_BUCKET_CHANGED, userId, -1, packageName)                                                                     
+            .sendToTarget();                                                                                                                                     
+    }                                                                                                                                                                
+
+    public void onParoleStateChanged(boolean isParoleOn) {                                                                                                           
+        mHandler.removeMessages(AlarmHandler.APP_STANDBY_BUCKET_CHANGED);                                                                                            
+        mHandler.removeMessages(AlarmHandler.APP_STANDBY_PAROLE_CHANGED);                                                                                            
+        mHandler.obtainMessage(AlarmHandler.APP_STANDBY_PAROLE_CHANGED,                                                                                              
+                Boolean.valueOf(isParoleOn)).sendToTarget();                                                                                                         
+    }                                                                                                                                                                
+};                                                                                                                                                                   
 ```
 
 
@@ -715,7 +953,105 @@ void reportEvent(UsageEvents.Event event) {
 
 
 
+### 4.4 JobScheduler的限制
 
+```
+/**                                                                                                                                                                  
+ * Tracking of app assignments to standby buckets                                                                                                                    
+ */                                                                                                                                                                  
+final class StandbyTracker extends AppIdleStateChangeListener {                                                                                                      
+
+    // AppIdleStateChangeListener interface for live updates                                                                                                         
+
+    @Override                                                                                                                                                        
+        public void onAppIdleStateChanged(final String packageName, final @UserIdInt int userId,                                                                         
+                boolean idle, int bucket, int reason) {                                                                                                                  
+            final int uid = mLocalPM.getPackageUid(packageName,                                                                                                          
+                    PackageManager.MATCH_UNINSTALLED_PACKAGES, userId);                                                                                                  
+            if (uid < 0) {                                                                                                                                               
+                if (DEBUG_STANDBY) {                                                                                                                                     
+                    Slog.i(TAG, "App idle state change for unknown app "                                                                                                 
+                            + packageName + "/" + userId);                                                                                                               
+                }                                                                                                                                                        
+                return;                                                                                                                                                  
+            }                                                                                                                                                            
+
+            final int bucketIndex = standbyBucketToBucketIndex(bucket);                                                                                                  
+            // update job bookkeeping out of band                                                                                                                        
+            BackgroundThread.getHandler().post(() -> {                                                                                                                   
+                    if (DEBUG_STANDBY) {                                                                                                                                     
+                    Slog.i(TAG, "Moving uid " + uid + " to bucketIndex " + bucketIndex);                                                                                 
+                    }                                                                                                                                                        
+                    synchronized (mLock) {                                                                                                                                   
+                    mJobs.forEachJobForSourceUid(uid, job -> {                                                                                                           
+                        // double-check uid vs package name to disambiguate shared uids                                                                                  
+                        if (packageName.equals(job.getSourcePackageName())) {                                                                                            
+                        job.setStandbyBucket(bucketIndex);  // 在JobStatus.java中修改job的app所在的bucket
+                        }                                                                                                                                                
+                        });                                                                                                                                                  
+                    onControllerStateChanged();  //重点分析
+                    }                                                                                                                                                        
+                    });                                                                                                                                                          
+        }                                                                                                                                                                
+    @Override                                                                                                                                                        
+        public void onParoleStateChanged(boolean isParoleOn) {                                                                                                           
+            if (DEBUG_STANDBY) {                                                                                                                                         
+                Slog.i(TAG, "Global parole state now " + (isParoleOn ? "ON" : "OFF"));                                                                                   
+            }                                                                                                                                                            
+            mInParole = isParoleOn;                                                                                                                                      
+        }                                                                                                                                                                
+
+    @Override                                                                                                                                                        
+        public void onUserInteractionStarted(String packageName, int userId) {                                                                                           
+            final int uid = mLocalPM.getPackageUid(packageName,                                                                                                          
+                    PackageManager.MATCH_UNINSTALLED_PACKAGES, userId);                                                                                                  
+            if (uid < 0) {                                                                                                                                               
+                // Quietly ignore; the case is already logged elsewhere                                                                                                  
+                return;                                                                                                                                                  
+            }                                                                                                                                                            
+
+            long sinceLast = mUsageStats.getTimeSinceLastJobRun(packageName, userId);                                                                                    
+            if (sinceLast > 2 * DateUtils.DAY_IN_MILLIS) {                                                                                                               
+                // Too long ago, not worth logging                                                                                                                       
+                sinceLast = 0L;                                                                                                                                          
+            }                                                                                                                                                            
+            final DeferredJobCounter counter = new DeferredJobCounter();                                                                                                 
+            synchronized (mLock) {                                                                                                                                       
+                mJobs.forEachJobForSourceUid(uid, counter);                                                                                                              
+            }                                                                                                                                                            
+            if (counter.numDeferred() > 0 || sinceLast > 0) {                                                                                                            
+                BatteryStatsInternal mBatteryStatsInternal = LocalServices.getService                                                                                    
+                    (BatteryStatsInternal.class);                                                                                                                    
+                mBatteryStatsInternal.noteJobsDeferred(uid, counter.numDeferred(), sinceLast);  
+            }
+        }
+}
+```
+
+`onControllerStateChanged()`发送了异步消息`MSG_CHECK_JOB` :
+
+```
+case MSG_CHECK_JOB:                                                                                                                                  
+if (mReportedActive) {                                                                                                                           
+    // if jobs are currently being run, queue all ready jobs for execution.                                                                      
+    // job 正在执行
+    queueReadyJobsForExecutionLocked();                                                                                                          
+} else {                                                                                                                                         
+    // Check the list of jobs and run some of them if we feel inclined.                                                                          
+    maybeQueueReadyJobsForExecutionLocked();                                                                                                     
+}                                                                                                                                                
+break;  
+```
+
+
+
+
+
+参考blog:
+
+ - [Android9.0 应用待机群组](https://www.codetd.com/article/2898647)
+ - [Android P 电量管理](https://blog.csdn.net/jilrvrtrc/article/details/81369918)
+ - [Power management restrictions](https://developer.android.google.cn/topic/performance/power/power-details)
 
 
 
