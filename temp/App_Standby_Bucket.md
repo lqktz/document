@@ -703,7 +703,7 @@ void reportEvent(UsageEvents.Event event) {
 
 rolloverStats函数中会调用loadActiveStats函数，loadActiveStats函数会调用mListener.onStatsReloaded函数，而这个mLisener正是UsageStatsService。
 而UsageStatsService的onStatsReloaded函数，是调用了AppStandbyController的postOneTimeCheckIdleStates，这个函数如下，因为这个时候已经开机，
-因此发送了一个MSG_ONE_TIME_CHECK_IDLE_STATES消息. 通过该异步消息会调用到checkIdleStates, 该方法最后会调用到checkAndUpdateStandbyState, 
+因此发送了一个`MSG_ONE_TIME_CHECK_IDLE_STATES`消息. 通过该异步消息会调用到checkIdleStates, 该方法最后会调用到checkAndUpdateStandbyState, 
 调用的方式如下:
 
 ```
@@ -775,8 +775,7 @@ public void setIdle(String packageName, int userId, long elapsedRealtime) {
 }
 ```
 
-android P 已经把原来的standby 功能合并到了新添加的应用待机分组功能.如果是idle状态就是对应STANDBY_BUCKET_RARE组,
-不是idle就是STANDBY_BUCKET_ACTIVE组.
+android P 已经把原来的standby 功能合并到了新添加的应用待机分组功能.如果是idle状态就是对应`STANDBY_BUCKET_RARE`组,不是idle就是`STANDBY_BUCKET_ACTIVE`组.
 
 ## 4 限制相关源码分析
 
@@ -801,7 +800,8 @@ private void maybeInformListeners(String packageName, int userId,
 }                                                                                                                                                                    
 ```
 
-MSG_INFORM_LISTENERS 异步消息进过调用,informListeners
+`MSG_INFORM_LISTENERS` 异步消息进过调用,informListeners
+
 ```
 case MSG_INFORM_LISTENERS:                                                                                                                               
     StandbyUpdateRecord r = (StandbyUpdateRecord) msg.obj;                                                                                               
@@ -955,6 +955,8 @@ final class AppStandbyTracker extends UsageStatsManagerInternal.AppIdleStateChan
 
 ### 4.4 JobScheduler的限制
 
+JobScheduler 监听实现：
+
 ```
 /**                                                                                                                                                                  
  * Tracking of app assignments to standby buckets                                                                                                                    
@@ -1028,19 +1030,53 @@ final class StandbyTracker extends AppIdleStateChangeListener {
 }
 ```
 
+在JobSchedulerService 创建的时候就添加Listener：
+
+```
+        // Set up the app standby bucketing tracker
+        mStandbyTracker = new StandbyTracker();
+        mUsageStats = LocalServices.getService(UsageStatsManagerInternal.class);
+        mUsageStats.addAppIdleStateChangeListener(mStandbyTracker);
+
+```
+
+
 `onControllerStateChanged()`发送了异步消息`MSG_CHECK_JOB` :
 
 ```
 case MSG_CHECK_JOB:                                                                                                                                  
 if (mReportedActive) {                                                                                                                           
     // if jobs are currently being run, queue all ready jobs for execution.                                                                      
-    // job 正在执行
+    // job 正在执行执行， 
     queueReadyJobsForExecutionLocked();                                                                                                          
 } else {                                                                                                                                         
     // Check the list of jobs and run some of them if we feel inclined.                                                                          
     maybeQueueReadyJobsForExecutionLocked();                                                                                                     
 }                                                                                                                                                
 break;  
+```
+
+bucket 在JobScheduler上的应用是`JobSchedulerService.java`:
+
+```
+        private static final int DEFAULT_STANDBY_WORKING_BEATS = 11;  // ~ 2 hours, with 11min beats
+        private static final int DEFAULT_STANDBY_FREQUENT_BEATS = 43; // ~ 8 hours
+        private static final int DEFAULT_STANDBY_RARE_BEATS = 130; // ~ 24 hours
+        
+        /**
+         * Mapping: standby bucket -> number of heartbeats between each sweep of that
+         * bucket's jobs.
+         *
+         * Bucket assignments as recorded in the JobStatus objects are normalized to be
+         * indices into this array, rather than the raw constants used
+         * by AppIdleHistory.
+         */
+        final int[] STANDBY_BEATS = {
+                0,
+                DEFAULT_STANDBY_WORKING_BEATS,
+                DEFAULT_STANDBY_FREQUENT_BEATS,
+                DEFAULT_STANDBY_RARE_BEATS
+        };
 ```
 
 
