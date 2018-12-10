@@ -785,10 +785,10 @@ android P 已经把原来的standby 功能合并到了新添加的应用待机�
 maybeInformListeners 来通知监听者:
 
 ```
-/** Inform listeners if the bucket has changed since it was last reported to listeners */                                                                            
-private void maybeInformListeners(String packageName, int userId,                                                                                                    
+/** Inform listeners if the bucket has changed since it was last reported to listeners */
+private void maybeInformListeners(String packageName, int userId,
         long elapsedRealtime, int bucket, int reason, boolean userStartedInteracting) {                                                                              
-    synchronized (mAppIdleLock) {                                                                                                                                    
+    synchronized (mAppIdleLock) {
         if (mAppIdleHistory.shouldInformListeners(packageName, userId,                                                                                               
                     elapsedRealtime, bucket)) {                                                                                                                          
             final StandbyUpdateRecord r = StandbyUpdateRecord.obtain(packageName, userId,                                                                            
@@ -796,29 +796,29 @@ private void maybeInformListeners(String packageName, int userId,
             if (DEBUG) Slog.d(TAG, "Standby bucket for " + packageName + "=" + bucket);                                                                              
             mHandler.sendMessage(mHandler.obtainMessage(MSG_INFORM_LISTENERS, r));                                                                                   
         }                                                                                                                                                            
-    }                                                                                                                                                                
-}                                                                                                                                                                    
+    }
+}
 ```
 
 `MSG_INFORM_LISTENERS` 异步消息进过调用,informListeners
 
 ```
-case MSG_INFORM_LISTENERS:                                                                                                                               
-    StandbyUpdateRecord r = (StandbyUpdateRecord) msg.obj;                                                                                               
-    informListeners(r.packageName, r.userId, r.bucket, r.reason,                                                                                         
+case MSG_INFORM_LISTENERS:
+    StandbyUpdateRecord r = (StandbyUpdateRecord) msg.obj;
+    informListeners(r.packageName, r.userId, r.bucket, r.reason,
         r.isUserInteraction);                                                                                                                        
-    r.recycle();                                                                                                                                         
-    break;                                                                                                                                               
+    r.recycle();
+    break;
 ```
 
 进入informListeners: 
 
 ```
-void informListeners(String packageName, int userId, int bucket, int reason,                                                                                         
+void informListeners(String packageName, int userId, int bucket, int reason,
         boolean userInteraction) {                                                                                                                                   
     // app所处的buncket的优先级在RARE以及RARE之下,标记为idle
-    final boolean idle = bucket >= STANDBY_BUCKET_RARE;                                                                                                              
-    synchronized (mPackageAccessListeners) {                                                                                                                         
+    final boolean idle = bucket >= STANDBY_BUCKET_RARE;
+    synchronized (mPackageAccessListeners) {
         for (AppIdleStateChangeListener listener : mPackageAccessListeners) {
             // onAppIdleStateChanged 用于通知监听者
             listener.onAppIdleStateChanged(packageName, userId, idle, bucket, reason);                                                                               
@@ -827,8 +827,8 @@ void informListeners(String packageName, int userId, int bucket, int reason,
                 listener.onUserInteractionStarted(packageName, userId);                                                                                              
             }                                                                                                                                                        
         }                                                                                                                                                            
-    }                                                                                                                                                                
-}                                                                                                                                                                    
+    }
+}
 ```
 
 从mPackageAccessListeners取出listener, 调用其方法onUserInteractionStarted. 重点就在分析清楚mPackageAccessListeners的结构:
@@ -836,47 +836,47 @@ void informListeners(String packageName, int userId, int bucket, int reason,
 ```
 import android.app.usage.UsageStatsManagerInternal.AppIdleStateChangeListener;
 
-@GuardedBy("mPackageAccessListeners")                                                                                                                                
-private ArrayList<AppIdleStateChangeListener>                                                                                                                        
-mPackageAccessListeners = new ArrayList<>();                                                                                                                 
+@GuardedBy("mPackageAccessListeners")
+private ArrayList<AppIdleStateChangeListener>
+mPackageAccessListeners = new ArrayList<>();
 
-void addListener(AppIdleStateChangeListener listener) {                                                                                                              
-    synchronized (mPackageAccessListeners) {                                                                                                                         
+void addListener(AppIdleStateChangeListener listener) {
+    synchronized (mPackageAccessListeners) {
         if (!mPackageAccessListeners.contains(listener)) {                                                                                                           
             mPackageAccessListeners.add(listener);                                                                                                                   
         }                                                                                                                                                            
-    }                                                                                                                                                                
-}                                                                                                                                                                    
+    }
+}
 
-void removeListener(AppIdleStateChangeListener listener) {                                                                                                           
-    synchronized (mPackageAccessListeners) {                                                                                                                         
+void removeListener(AppIdleStateChangeListener listener) {
+    synchronized (mPackageAccessListeners) {
         mPackageAccessListeners.remove(listener);                                                                                                                    
-    }                                                                                                                                                                
-}                                                                                                                                                                    
+    }
+}
 ```
 上面的listener, 就是AppIdleStateChangeListener 类型, 而AppIdleStateChangeListener又定义在UsageStatsManagerInternal.java中: 
 
 ```
-public static abstract class AppIdleStateChangeListener {                                                                                                            
+public static abstract class AppIdleStateChangeListener {
 
-    /** Callback to inform listeners that the idle state has changed to a new bucket. */                                                                             
-    public abstract void onAppIdleStateChanged(String packageName, @UserIdInt int userId,                                                                            
+    /** Callback to inform listeners that the idle state has changed to a new bucket. */
+    public abstract void onAppIdleStateChanged(String packageName, @UserIdInt int userId,
             boolean idle, int bucket, int reason);                                                                                                                   
 
-    /**                                                                                                                                                              
-     * Callback to inform listeners that the parole state has changed. This means apps are                                                                           
-     * allowed to do work even if they're idle or in a low bucket.                                                                                                   
-     */                                                                                                                                                              
-    public abstract void onParoleStateChanged(boolean isParoleOn);                                                                                                   
+    /**
+     * Callback to inform listeners that the parole state has changed. This means apps are
+     * allowed to do work even if they're idle or in a low bucket.
+     */
+    public abstract void onParoleStateChanged(boolean isParoleOn);
 
-    /**                                                                                                                                                              
-     * Optional callback to inform the listener that the app has transitioned into                                                                                   
-     * an active state due to user interaction.                                                                                                                      
-     */                                                                                                                                                              
-    public void onUserInteractionStarted(String packageName, @UserIdInt int userId) {                                                                                
+    /**
+     * Optional callback to inform the listener that the app has transitioned into
+     * an active state due to user interaction.
+     */
+    public void onUserInteractionStarted(String packageName, @UserIdInt int userId) {
         // No-op by default                                                                                                                                          
-    }                                                                                                                                                                
-}                                                                                                                                                                    
+    }
+}
 ```
 这就是个AppIdleStateChangeListener的接口, listener对应的就是其真正的实现类:
 
@@ -899,7 +899,7 @@ public static abstract class AppIdleStateChangeListener {
 private class AppIdleStateChangeListener
 extends UsageStatsManagerInternal.AppIdleStateChangeListener {
 
-    @Override                                                                                                                                                        
+    @Override
         public void onAppIdleStateChanged(String packageName, int userId, boolean idle, int bucket,                                                                      
                 int reason) {                                                                                                                                            
             try {                                                                                                                                                        
@@ -914,58 +914,88 @@ extends UsageStatsManagerInternal.AppIdleStateChangeListener {
             }                                                                                                                                                            
         }                                                                                                                                                                
 
-    @Override                                                                                                                                                        
+    @Override
         public void onParoleStateChanged(boolean isParoleOn) {                                                                                                           
             synchronized (mUidRulesFirstLock) {                                                                                                                          
                 mLogger.paroleStateChanged(isParoleOn);                                                                                                                  
                 updateRulesForAppIdleParoleUL();                                                                                                                         
             }                                                                                                                                                            
         }                                                                                                                                                                
-}                                                                                                                                                                    
+}
 ```
 
 ### 4.3 Alarm的限制
 
-```
-/**                                                                                                                                                                  
- * Tracking of app assignments to standby buckets                                                                                                                    
- */                                                                                                                                                                  
-final class AppStandbyTracker extends UsageStatsManagerInternal.AppIdleStateChangeListener {                                                                         
+AlarmManagerService.java里的final类AppStandbyTracker:
 
-    public void onAppIdleStateChanged(final String packageName, final @UserIdInt int userId,                                                                         
+```
+/**
+ * Tracking of app assignments to standby buckets
+ */
+final class AppStandbyTracker extends UsageStatsManagerInternal.AppIdleStateChangeListener {
+
+    public void onAppIdleStateChanged(final String packageName, final @UserIdInt int userId,
             boolean idle, int bucket, int reason) {                                                                                                                  
         mHandler.removeMessages(AlarmHandler.APP_STANDBY_BUCKET_CHANGED);                                                                                            
         mHandler.obtainMessage(AlarmHandler.APP_STANDBY_BUCKET_CHANGED, userId, -1, packageName)                                                                     
             .sendToTarget();                                                                                                                                     
-    }                                                                                                                                                                
+    }
 
-    public void onParoleStateChanged(boolean isParoleOn) {                                                                                                           
+    public void onParoleStateChanged(boolean isParoleOn) {
         mHandler.removeMessages(AlarmHandler.APP_STANDBY_BUCKET_CHANGED);                                                                                            
         mHandler.removeMessages(AlarmHandler.APP_STANDBY_PAROLE_CHANGED);                                                                                            
         mHandler.obtainMessage(AlarmHandler.APP_STANDBY_PAROLE_CHANGED,                                                                                              
                 Boolean.valueOf(isParoleOn)).sendToTarget();                                                                                                         
-    }                                                                                                                                                                
-};                                                                                                                                                                   
+    }
+};
 ```
 
+关于alarm的延时定义:
 
+```
+        // Keys for specifying throttling delay based on app standby bucketing
+        private final String[] KEYS_APP_STANDBY_DELAY = {
+                "standby_active_delay",
+                "standby_working_delay",
+                "standby_frequent_delay",
+                "standby_rare_delay",
+                "standby_never_delay",
+        };
 
+        private static final long DEFAULT_MIN_FUTURITY = 5 * 1000;
+        private static final long DEFAULT_MIN_INTERVAL = 60 * 1000;
+        private static final long DEFAULT_MAX_INTERVAL = 365 * DateUtils.DAY_IN_MILLIS;
+        private static final long DEFAULT_ALLOW_WHILE_IDLE_SHORT_TIME = DEFAULT_MIN_FUTURITY;
+        private static final long DEFAULT_ALLOW_WHILE_IDLE_LONG_TIME = 9*60*1000;
+        private static final long DEFAULT_ALLOW_WHILE_IDLE_WHITELIST_DURATION = 10*1000;
+        private static final long DEFAULT_LISTENER_TIMEOUT = 5 * 1000;
+        private final long[] DEFAULT_APP_STANDBY_DELAYS = {
+                0,                       // Active
+                6 * 60_000,              // Working
+                30 * 60_000,             // Frequent
+                2 * 60 * 60_000,         // Rare
+                10 * 24 * 60 * 60_000    // Never
+        };
+```
 
-
+- AlarmManagerService->setImplLocked
+- AlarmManagerSerivice->adjustDeliveryTimeBasedOnStandbyBucketLocked 
+- AlarmManagerService->getMinDelayForBucketLocked
+由于对alarm不熟悉,就先到这.
 
 ### 4.4 JobScheduler的限制
 
 JobScheduler 监听实现：
 
 ```
-/**                                                                                                                                                                  
- * Tracking of app assignments to standby buckets                                                                                                                    
- */                                                                                                                                                                  
-final class StandbyTracker extends AppIdleStateChangeListener {                                                                                                      
+/**
+ * Tracking of app assignments to standby buckets
+ */
+final class StandbyTracker extends AppIdleStateChangeListener {
 
-    // AppIdleStateChangeListener interface for live updates                                                                                                         
+    // AppIdleStateChangeListener interface for live updates
 
-    @Override                                                                                                                                                        
+    @Override
         public void onAppIdleStateChanged(final String packageName, final @UserIdInt int userId,                                                                         
                 boolean idle, int bucket, int reason) {                                                                                                                  
             final int uid = mLocalPM.getPackageUid(packageName,                                                                                                          
@@ -995,7 +1025,7 @@ final class StandbyTracker extends AppIdleStateChangeListener {
                     }                                                                                                                                                        
                     });                                                                                                                                                          
         }                                                                                                                                                                
-    @Override                                                                                                                                                        
+    @Override
         public void onParoleStateChanged(boolean isParoleOn) {                                                                                                           
             if (DEBUG_STANDBY) {                                                                                                                                         
                 Slog.i(TAG, "Global parole state now " + (isParoleOn ? "ON" : "OFF"));                                                                                   
@@ -1003,7 +1033,7 @@ final class StandbyTracker extends AppIdleStateChangeListener {
             mInParole = isParoleOn;                                                                                                                                      
         }                                                                                                                                                                
 
-    @Override                                                                                                                                                        
+    @Override
         public void onUserInteractionStarted(String packageName, int userId) {                                                                                           
             final int uid = mLocalPM.getPackageUid(packageName,                                                                                                          
                     PackageManager.MATCH_UNINSTALLED_PACKAGES, userId);                                                                                                  
@@ -1040,23 +1070,102 @@ final class StandbyTracker extends AppIdleStateChangeListener {
 
 ```
 
-
 `onControllerStateChanged()`发送了异步消息`MSG_CHECK_JOB` :
 
 ```
-case MSG_CHECK_JOB:                                                                                                                                  
-if (mReportedActive) {                                                                                                                           
-    // if jobs are currently being run, queue all ready jobs for execution.                                                                      
-    // job 正在执行执行， 
-    queueReadyJobsForExecutionLocked();                                                                                                          
-} else {                                                                                                                                         
-    // Check the list of jobs and run some of them if we feel inclined.                                                                          
-    maybeQueueReadyJobsForExecutionLocked();                                                                                                     
-}                                                                                                                                                
-break;  
+case MSG_CHECK_JOB:
+if (mReportedActive) {
+    // if jobs are currently being run, queue all ready jobs for execution.
+    // job 正在执行执行，让其2执行完
+    queueReadyJobsForExecutionLocked();
+} else {
+    // Check the list of jobs and run some of them if we feel inclined.
+    maybeQueueReadyJobsForExecutionLocked();
+}
+break; 
 ```
 
-bucket 在JobScheduler上的应用是`JobSchedulerService.java`:
+`maybeQueueReadyJobsForExecutionLocked()` 的实现:
+
+```
+    private void maybeQueueReadyJobsForExecutionLocked() {
+        if (DEBUG) Slog.d(TAG, "Maybe queuing ready jobs...");                                                                            
+                                                                                                                                          
+        noteJobsNonpending(mPendingJobs);                                                                                                 
+        mPendingJobs.clear();                                                                                                             
+        stopNonReadyActiveJobsLocked();                                                                                                   
+        mJobs.forEachJob(mMaybeQueueFunctor);  // 会调用到MaybeReadyJobQueueFunctor的accept()方法
+                                                                            
+        mMaybeQueueFunctor.postProcess();  // mPendingJobs.addAll(runnableJobs)
+                                                                                               
+    }
+```
+
+`MaybeReadyJobQueueFunctor` 的 accept() 会调用到isReadyToBeExecutedLocked(job):
+
+```
+    /**
+     * Criteria for moving a job into the pending queue:
+     *      - It's ready.
+     *      - It's not pending.
+     *      - It's not already running on a JSC.
+     *      - The user that requested the job is running.
+     *      - The job's standby bucket has come due to be runnable.
+     *      - The component is enabled and runnable.
+     */
+    private boolean isReadyToBeExecutedLocked(JobStatus job) {
+		.....
+        // If the app is in a non-active standby bucket, make sure we've waited
+        // an appropriate amount of time since the last invocation.  During device-
+        // wide parole, standby bucketing is ignored.
+        //
+        // Jobs in 'active' apps are not subject to standby, nor are jobs that are
+        // specifically marked as exempt.
+        if (DEBUG_STANDBY) {
+            Slog.v(TAG, "isReadyToBeExecutedLocked: " + job.toShortString()
+                    + " parole=" + mInParole + " active=" + job.uidActive
+                    + " exempt=" + job.getJob().isExemptedFromAppStandby());
+        }
+        if (!mInParole
+                && !job.uidActive
+                && !job.getJob().isExemptedFromAppStandby()) {
+            final int bucket = job.getStandbyBucket();
+            if (DEBUG_STANDBY) {
+                Slog.v(TAG, "  bucket=" + bucket + " heartbeat=" + mHeartbeat
+                        + " next=" + mNextBucketHeartbeat[bucket]);
+            }
+            if (mHeartbeat < mNextBucketHeartbeat[bucket]) {
+                // Only skip this job if the app is still waiting for the end of its nominal
+                // bucket interval.  Once it's waited that long, we let it go ahead and clear.
+                // The final (NEVER) bucket is special; we never age those apps' jobs into
+                // runnability.
+                final long appLastRan = heartbeatWhenJobsLastRun(job);
+                if (bucket >= mConstants.STANDBY_BEATS.length
+                        || (mHeartbeat > appLastRan
+                                && mHeartbeat < appLastRan + mConstants.STANDBY_BEATS[bucket])) {
+                    // TODO: log/trace that we're deferring the job due to bucketing if we hit this
+                    if (job.getWhenStandbyDeferred() == 0) {
+                        if (DEBUG_STANDBY) {
+                            Slog.v(TAG, "Bucket deferral: " + mHeartbeat + " < "
+                                    + (appLastRan + mConstants.STANDBY_BEATS[bucket])
+                                    + " for " + job);
+                        }
+                        job.setWhenStandbyDeferred(sElapsedRealtimeClock.millis());
+                    }
+                    return false;
+                } else {
+                    if (DEBUG_STANDBY) {
+                        Slog.v(TAG, "Bucket deferred job aged into runnability at "
+                                + mHeartbeat + " : " + job);
+                    }
+                }
+            }
+	......
+	}
+
+```
+
+`STANDBY_BEATS` 的定义`JobSchedulerService.java` 中:
 
 ```
         private static final int DEFAULT_STANDBY_WORKING_BEATS = 11;  // ~ 2 hours, with 11min beats
@@ -1079,8 +1188,30 @@ bucket 在JobScheduler上的应用是`JobSchedulerService.java`:
         };
 ```
 
+经过一系列的计算,不同bucket的心跳是不一样的,这样就实现了延时实现不同bucket的JS.心跳的计算是在:
 
+```
+    /**
+     * Heartbeat tracking.  The heartbeat alarm is intentionally non-wakeup.
+     */
+    class HeartbeatAlarmListener implements AlarmManager.OnAlarmListener {
 
+        @Override
+        public void onAlarm() {
+            synchronized (mLock) {
+                final long sinceLast = sElapsedRealtimeClock.millis() - mLastHeartbeatTime;
+                final long beatsElapsed = sinceLast / mConstants.STANDBY_HEARTBEAT_TIME;
+                if (beatsElapsed > 0) {
+                    mLastHeartbeatTime += beatsElapsed * mConstants.STANDBY_HEARTBEAT_TIME;
+                    advanceHeartbeatLocked(beatsElapsed); // 不让触发alarm, 就是延时
+                }
+            }
+            setNextHeartbeatAlarm(); // 设置下一次alarm 时间
+        }
+    }
+```
+
+这块代码,具体没有研究透彻,先告一段落.
 
 
 参考blog:
@@ -1088,6 +1219,7 @@ bucket 在JobScheduler上的应用是`JobSchedulerService.java`:
  - [Android9.0 应用待机群组](https://www.codetd.com/article/2898647)
  - [Android P 电量管理](https://blog.csdn.net/jilrvrtrc/article/details/81369918)
  - [Power management restrictions](https://developer.android.google.cn/topic/performance/power/power-details)
+ - [Android P新特性 ---应用待机群组（#####笔记#####）](https://blog.csdn.net/weixin_42963076/article/details/82689172)
 
 
 
