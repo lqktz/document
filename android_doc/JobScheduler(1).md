@@ -56,7 +56,7 @@ public class MyJobService extends JobService {
                 .setRequiresDeviceIdle(false)// 设备是否空闲
                 .setPersisted(true) //设备重启后是否继续执行 需要权限android.permission.RECEIVE_BOOT_COMPLETED
                 .setBackoffCriteria(3000,JobInfo.BACKOFF_POLICY_LINEAR) //设置退避/重试策略
-                .build();
+                .build(); // build 才是真正的执行创建
 
         Log.d(TAG,"scheduler.schedule");
         scheduler.schedule(jobInfo);
@@ -69,6 +69,12 @@ public class MyJobService extends JobService {
             android:permission="android.permission.BIND_JOB_SERVICE"
             android:exported="true"/>
 ```
+
+这里梳理一下流程:
+ - 通过getSystemService获取JobSchedulerService的代理端
+ - `new Intent(this, MyJobService.class)` 创建服务, 启动服务
+ - 采用builder模式创建JobInfo对象
+ - 调用`JobScheduler.schedule(JobInfo)` 启动`JobInfo`
 
 ## 2 查看定义的jobscheduler
 
