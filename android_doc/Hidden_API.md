@@ -553,7 +553,24 @@ void MemberSignature::WarnAboutAccess(AccessMethod access_method,
                << Dumpable<MemberSignature>(*this) << " (" << list << ", " << access_method << ")";
 ```
 
+在代码介绍过程中有白名单,灰名单等,在源码中的目录如下
 
+```
+out/target/common/obj/PACKAGING/hiddenapi-light-greylist.txt
+out/target/common/obj/PACKAGING/hiddenapi-dark-greylist.txt
+out/target/common/obj/PACKAGING/hiddenapi-blacklist.txt
+
+frameworks/base/config/hiddenapi-force-blacklist.txt
+frameworks/base/config/hiddenapi-light-greylist.txt
+frameworks/base/config/hiddenapi-private-dex.txt
+frameworks/base/config/hiddenapi-public-dex.txt
+frameworks/base/config/hiddenapi-removed-dex.txt
+frameworks/base/config/hiddenapi-vendor-list.txt
+
+
+out/target/product/product_name/system/etc/sysconfig/hiddenapi-package-whitelist.xml
+frameworks/base/data/etc/hiddenapi-package-whitelist.xml
+```
 
 # 参考资料
 
