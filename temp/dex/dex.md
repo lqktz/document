@@ -3,15 +3,22 @@
 dex文件是android特有的文件,对应java里面的class,更加适合ARM架构.本文的重点是解析一个dex文件.
 
 ## 0 工具介绍
-会用到两个bin文件,在Sdk里面
+分析dex的过程会用到两个bin文件,在Sdk里面
 
 ```
 Android/Sdk/build-tools/28.0.3/dx
 Android/Sdk/build-tools/28.0.3/dexdump
 ```
+28.0.3是版本号。
 
-`dx`用于生成dex文件,`dexdump`用于解析dex文件,类似与解析
+`dx`用于生成dex文件,`dexdump`用于解析`dex`文件,类似与解析`class`文件的`javap`
 
+`dx`,`dexdump `的源码位于
+
+```
+aosp/dalvik/dx
+aosp/dalvik/dexdump
+```
 ## 1 实例介绍
 
 java文件:HelloWorld.java
@@ -26,7 +33,7 @@ public class HelloWorld {
 通过运行`javac HelloWorld.java` ,产生 `HelloWorld.class`,接着运行`dx --dex --output=HelloWorld.dex HelloWorld.class`
 产生dex文件`HelloWorld.dex`.
 
-使用xxd命令可以以十六进制的形式查看dex文件, `xxd HelloWorld.dex` : 
+使用`xxd`命令可以以十六进制的形式查看dex文件, `xxd HelloWorld.dex` : 
 
 ```
 0000000: 6465 780a 3033 3500 1561 511c 0915 68b5  dex.035..aQ...h.
@@ -83,6 +90,29 @@ public class HelloWorld {
 ```
 Processing 'HelloWorld.dex'...
 Opened 'HelloWorld.dex', DEX version '035'
+DEX file header:
+magic               : 'dex\n035\0'
+checksum            : 1c516115
+signature           : 0915...abad
+file_size           : 748
+header_size         : 112
+link_size           : 0
+link_off            : 0 (0x000000)
+string_ids_size     : 14
+string_ids_off      : 112 (0x000070)
+type_ids_size       : 7
+type_ids_off        : 168 (0x0000a8)
+proto_ids_size       : 3
+proto_ids_off        : 196 (0x0000c4)
+field_ids_size      : 1
+field_ids_off       : 232 (0x0000e8)
+method_ids_size     : 4
+method_ids_off      : 240 (0x0000f0)
+class_defs_size     : 1
+class_defs_off      : 272 (0x000110)
+data_size           : 444
+data_off            : 304 (0x000130)
+
 Class #0            -
   Class descriptor  : 'LHelloWorld;'
   Access flags      : 0x0001 (PUBLIC)
@@ -131,6 +161,47 @@ dex文件的结构定义在: `dalvik/libdex/DexFile.h`
 
 ```
 /*
+ * Structure representing a DEX file.
+ *
+ * Code should regard DexFile as opaque, using the API calls provided here
+ * to access specific structures.
+ */
+struct DexFile {
+    /* directly-mapped "opt" header */
+    const DexOptHeader* pOptHeader;
+
+    /* pointers to directly-mapped structs and arrays in base DEX */
+    const DexHeader*    pHeader;
+    const DexStringId*  pStringIds;
+    const DexTypeId*    pTypeIds;
+    const DexFieldId*   pFieldIds;
+    const DexMethodId*  pMethodIds;
+    const DexProtoId*   pProtoIds;
+    const DexClassDef*  pClassDefs;
+    const DexLink*      pLinkData;
+
+    /*
+     * These are mapped out of the "auxillary" section, and may not be
+     * included in the file.
+     */
+    const DexClassLookup* pClassLookup;
+    const void*         pRegisterMapPool;       // RegisterMapClassPool
+
+    /* points to start of DEX file data */
+    const u1*           baseAddr;
+
+    /* track memory overhead for auxillary structures */
+    int                 overhead;
+
+    /* additional app-specific data structures associated with the DEX */
+    //void*               auxData;
+};
+```
+
+` DexHeader` 的定义也在`DexFile.h`中：
+
+```
+/*
  * Direct-mapped "header_item" struct.
  */
 struct DexHeader {
@@ -159,3 +230,30 @@ struct DexHeader {
     u4  dataOff;
 };
 ```
+
+dex文件的数据类型[官方描述](https://source.android.com/devices/tech/dalvik/dex-format#encoding)：
+
+![数据类型](data_type.jpg)
+
+class 文件的结构
+
+```
+ /*
+ * Direct-mapped "class_def_item".
+ */
+struct DexClassDef {
+    u4  classIdx;           /* index into typeIds for this class */
+    u4  accessFlags;
+    u4  superclassIdx;      /* index into typeIds for superclass */
+    u4  interfacesOff;      /* file offset to DexTypeList */
+    u4  sourceFileIdx;      /* index into stringIds for source file name */
+    u4  annotationsOff;     /* file offset to annotations_directory_item */
+    u4  classDataOff;       /* file offset to class_data_item */
+    u4  staticValuesOff;    /* file offset to DexEncodedArray */
+};
+```
+wew 
+
+
+
+

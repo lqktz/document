@@ -1,5 +1,28 @@
 Processing 'HelloWorld.dex'...
 Opened 'HelloWorld.dex', DEX version '035'
+DEX file header:
+magic               : 'dex\n035\0'
+checksum            : 1c516115
+signature           : 0915...abad
+file_size           : 748
+header_size         : 112
+link_size           : 0
+link_off            : 0 (0x000000)
+string_ids_size     : 14
+string_ids_off      : 112 (0x000070)
+type_ids_size       : 7
+type_ids_off        : 168 (0x0000a8)
+proto_ids_size       : 3
+proto_ids_off        : 196 (0x0000c4)
+field_ids_size      : 1
+field_ids_off       : 232 (0x0000e8)
+method_ids_size     : 4
+method_ids_off      : 240 (0x0000f0)
+class_defs_size     : 1
+class_defs_off      : 272 (0x000110)
+data_size           : 444
+data_off            : 304 (0x000130)
+
 Class #0            -
   Class descriptor  : 'LHelloWorld;'
   Access flags      : 0x0001 (PUBLIC)

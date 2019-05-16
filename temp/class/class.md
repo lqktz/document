@@ -2,6 +2,8 @@
 
 # 1 Class 文件结构
 
+最近在看《深入理解Android Java 虚拟机ART》，里面的第二章是讲解Class文件结构的，结合书籍以及《Java虚拟机规范1.7》的第四章节。手动的解析了一个helloworld的Java文件对应的class文件。本文主要目的就是通过例子加深对Java虚拟机规范所写的规范的理解。
+
 ```
 ClassFile {
        u4 magic;
@@ -496,7 +498,11 @@ u2 sourcefile_index;
 
 最后的 `0a` 是%!xxd 命令导致的,可以使用其他命令, [参考](https://blog.csdn.net/qqliyunpeng/article/details/50548274)
 
-
+## 参考文献
+1. [Java虚拟机规范] (https://docs.oracle.com/javase/specs/index.html)
+2. [维基百科java指令集列表](https://en.wikipedia.org/wiki/Talk:Java_bytecode_instruction_listings)
+3. [method方法在class文件中是怎样组织的] (https://blog.csdn.net/wangtaomtk/article/details/52267621)
+4. [深入理解Java虚拟机专栏] (https://blog.csdn.net/brave2211/column/info/zhangjg-java-blog)
 
 
 
