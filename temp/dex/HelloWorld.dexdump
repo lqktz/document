@@ -1,0 +1,41 @@
+Processing 'HelloWorld.dex'...
+Opened 'HelloWorld.dex', DEX version '035'
+Class #0            -
+  Class descriptor  : 'LHelloWorld;'
+  Access flags      : 0x0001 (PUBLIC)
+  Superclass        : 'Ljava/lang/Object;'
+  Interfaces        -
+  Static fields     -
+  Instance fields   -
+  Direct methods    -
+    #0              : (in LHelloWorld;)
+      name          : '<init>'
+      type          : '()V'
+      access        : 0x10001 (PUBLIC CONSTRUCTOR)
+      code          -
+      registers     : 1
+      ins           : 1
+      outs          : 1
+      insns size    : 4 16-bit code units
+      catches       : (none)
+      positions     : 
+        0x0000 line=1
+      locals        : 
+        0x0000 - 0x0004 reg=0 this LHelloWorld; 
+    #1              : (in LHelloWorld;)
+      name          : 'main'
+      type          : '([Ljava/lang/String;)V'
+      access        : 0x0009 (PUBLIC STATIC)
+      code          -
+      registers     : 3
+      ins           : 1
+      outs          : 2
+      insns size    : 8 16-bit code units
+      catches       : (none)
+      positions     : 
+        0x0000 line=3
+        0x0007 line=4
+      locals        : 
+  Virtual methods   -
+  source_file_idx   : 2 (HelloWorld.java)
+
