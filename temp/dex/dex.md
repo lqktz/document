@@ -19,6 +19,13 @@ Android/Sdk/build-tools/28.0.3/dexdump
 aosp/dalvik/dx
 aosp/dalvik/dexdump
 ```
+
+dex 文件能将多个class封装到一个dex文件里,合并他们的constant pool & data:
+
+![dex&class.jpg](dex&class.jpg)
+
+> 图片源自网络
+
 ## 1 实例介绍
 
 java文件:HelloWorld.java
@@ -85,7 +92,7 @@ public class HelloWorld {
 00002e0: 0010 0000 0100 0000 4c02 0000            ........L...
 ```
 
-利用dexdump解析dex文件`dexdump HelloWorld.dex`: 
+利用dexdump解析dex文件`dexdump -f HelloWorld.dex`: 
 
 ```
 Processing 'HelloWorld.dex'...
@@ -231,9 +238,11 @@ struct DexHeader {
 };
 ```
 
-dex文件的数据类型[官方描述](https://source.android.com/devices/tech/dalvik/dex-format#encoding)：
+DexHeader的介绍[官方文章](https://source.android.com/devices/tech/dalvik/dex-format#encoding)：
 
-![数据类型](data_type.jpg)
+![数据类型](dex_header.png)
+
+>图源自网络
 
 class 文件的结构
 
