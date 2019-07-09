@@ -20,6 +20,10 @@ YouTube |
 ```
 本例子中,要解析的文件就是`YouTube.vdex`.
 
+整个流程如下图
+
+![vdex](./vdex.png)
+
 **在以下解析过程中,如果提示权限问题,请自行使用`chmod`添加可执行权限，下文中不在赘述！！！**
 
 ## 1 解析vdex到cdex文件
@@ -59,6 +63,7 @@ git clone https://github.com/anestisb/vdexExtractor.git
 xxd YouTube_classes.cdex.new > YouTube_classes.xxd
 ```
 使用vim 打开十六进制文件:
+
 ```
 0000000: 6465 780a 3033 3900 269f f4eb 7c38 1377  dex.039.&...|8.w
 0000010: 2e77 ca50 98c9 a450 8edb 19c1 1701 32b8  .w.P...P......2.
@@ -84,13 +89,24 @@ xxd YouTube_classes.cdex.new > YouTube_classes.xxd
 ![dex2jar_download.png](./dex2jar_download.png)
 
 查看工具的内容:
+
 ```
-d2j-baksmali.bat  d2j-dex2jar.sh     d2j-dex-recompute-checksum.bat  d2j_invoke.sh    d2j-jar2jasmin.bat  d2j-jasmin2jar.sh  d2j-std-apk.bat
-d2j-baksmali.sh   d2j-dex2smali.bat  d2j-dex-recompute-checksum.sh   d2j-jar2dex.bat  d2j-jar2jasmin.sh   d2j-smali.bat      d2j-std-apk.sh
-d2j-dex2jar.bat   d2j-dex2smali.sh   d2j_invoke.bat                  d2j-jar2dex.sh   d2j-jasmin2jar.bat  d2j-smali.sh       lib
+d2j-baksmali.bat  d2j-dex2jar.sh     d2j-dex-recompute-checksum.bat  
+d2j_invoke.sh    d2j-jar2jasmin.bat  d2j-jasmin2jar.sh  d2j-std-apk.bat
+d2j-baksmali.sh   d2j-dex2smali.bat  d2j-dex-recompute-checksum.sh   
+d2j-jar2dex.bat  d2j-jar2jasmin.sh   d2j-smali.bat      d2j-std-apk.sh
+d2j-dex2jar.bat   d2j-dex2smali.sh   d2j_invoke.bat                  
+d2j-jar2dex.sh   d2j-jasmin2jar.bat  d2j-smali.sh       lib
 ```
 
-可以看到工具里面既有sh文件,也有bat文件,该工具适用于Linux & Windows.这里使用shell版本.`./dex2jar-2.0/d2j-dex2jar.sh YouTube_classes.cdex.new`
+可以看到工具里面既有sh文件,也有bat文件,该工具适用于Linux & Windows.这里使用shell版本.
+
+```
+./dex2jar-2.0/d2j-dex2jar.sh YouTube_classes.cdex.new
+```
+
+可能你会遇到这样的报错：
+
 ```
 dex2jar YouTube_classes.cdex.new -> ./YouTube_classes.cdex-dex2jar.jar
 com.googlecode.d2j.DexException: not support version.
