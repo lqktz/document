@@ -262,13 +262,15 @@ mount的f2fs文件系统的信息可以在`/sys/fs/f2fs`中找到。每个mount�
 此参数控制空闲NID和缓存NAT项使用的内存占用。默认设置为10，表示内存为10 MB/1 GB。
 
 ## 使用
-
+此处略去，主要适用于Linux，非android配置。
 
 ## 设计
 
 **在磁盘的布局**
-F2FS将整个卷分为多个segment，每个的固定大小是2M。一个section由连续的segment组成。一个zone由多个
+F2FS将整个卷分为多个segment，每个的固定大小是2M。一个section由连续的segment组成。一个zone由多个由一组多个section组成。默认情况下，部分和区域大小设置为1段大小相同，但是用户可以通过mkfs轻松修改大小。
 
+F2FS将整个区域分割为6大区域，并且，除superblock意外的其他区域都包含多个segments，如下描述：
+```
                                             align with the zone size <-|
                  |-> align with the segment size
      _________________________________________________________________________
@@ -287,14 +289,161 @@ F2FS将整个卷分为多个segment，每个的固定大小是2M。一个section
                                     .            .
 		                    .________.
 	                            |__zone__|
+```
 
+<以下翻译不是完全翻译，包括其他的先关的理解>
+- 超级块（SB） 包含基本分区信息和F2FS在格式化分区时确定不可更改的参数。它位于分区的开始的位置，为了避免文件系统crash，有两份copy。把包括基本的分区参数和一些f2fs默认的参数。
 
+- 检查点（CP） 保存文件系统状态，有效NAT/SIT（见下文说明）集合的位图，孤儿inode列表（文件被删除时尚有引用无法立即释放时需被计入此列表，以便再次挂载时释放）和当前活跃段的所有者信息。和其他日志结构文件系统一样，F2FS检查点时某一给定时点一致的文件系统状态集合——可用于系统崩溃或掉电后的数据恢复。F2FS的两个检查点各占一个Segment，和前述不同的是，F2FS通过检查点头尾两个数据块中的version信息判断检查点是否有效。
 
-****
+- 段信息表Segment Information Table（SIT） 包含主区域（Main Area，见下文说明）中每个段的有效块数和标记块是否有效的位图。SIT主要用于回收过程中选择需要搬移的段和识别段中有效数据。
 
-****
+- 索引节点地址表Node Address Table（NAT） 用于定位所有主区域的索引节点块（包括：inode节点、直接索引节点、间接索引节点）地址。即NAT中存放的是inode或各类索引node的实际存放地址。
 
-****
+- 段摘要区Segment Summary Area (SSA) 主区域所有数据块的所有者信息（即反向索引），包括：父inode号和内部偏移。SSA表项可用于搬移有效块前查找其父亲索引节点编号,
 
+- 主区域 Main Area 由4KB大小的数据块组成，每个块被分配用于存储数据（文件或目录内容）和索引（inode或数据块索引）。一定数量的连续块组成Segment，进而组成Section和Zone（如前所述）。一个Segment要么存储数据，要么存储索引，据此可将Segment划分为数据段和索引段。
 
-****
+**File System Metadata Structure（文件系统元数据结构）**
+F2FS采用检查点方案来维护文件系统的一致性。在挂载时，F2FS首先尝试通过扫描CP区域来查找最后一个有效的检查点数据。为了减少扫描时间，F2FS仅使用CP的两个副本。“一个”始终表示最后一个有效数据，称为“影子复制”机制。除了CP之外，NAT和SIT还采用影子复制机制。
+
+为了文件系统的一致性，每个ＣＰ指向有效的NAT和SIT副本，如下所示。
+```
+
+  +--------+----------+---------+
+  |   CP   |    SIT   |   NAT   |
+  +--------+----------+---------+
+  .         .          .          .
+  .            .              .              .
+  .               .                 .                 .
+  +-------+-------+--------+--------+--------+--------+
+  | CP #0 | CP #1 | SIT #0 | SIT #1 | NAT #0 | NAT #1 |
+  +-------+-------+--------+--------+--------+--------+
+     |             ^                          ^
+     |             |                          |
+     `----------------------------------------'
+```
+
+**Index Structure（索引结构）**
+管理数据位置的关键数据结构是“node”。与传统文件结构类似，F2FS具有三种类型的节点：inode，direct node,indirect node.
+间接节点。F2FS给一个inode块分配了4k，一个inode包括了923个data块索引，两个direct node指针，两个indirect node指针，一个double indirect node。一个直接索引块可以包括1018个data块，一个one indirect node块也包括1018个node块。因此，一个inode块包含：
+```
+  4KB * (923 + 2 * 1018 + 2 * 1018 * 1018 + 1018 * 1018 * 1018) := 3.94TB.   （4KB是指一个block大小）
+
+   Inode block (4KB)
+     |- data (923)
+     |- direct node (2)
+     |          `- data (1018)
+     |- indirect node (2)
+     |            `- direct node (1018)
+     |                       `- data (1018)
+     `- double indirect node (1)
+                         `- indirect node (1018)
+			              `- direct node (1018)
+	                                         `- data (1018)
+```
+
+请注意，所有节点块均由NAT映射，这意味着每个节点的位置均由NAT表转换。考虑到游荡树问题，F2FS能够阻止由叶数据写入引起的节点更新的传播。
+
+**Directory Structure**
+一个dir entry占据11比特，包括以下属性：
+- hash 文件名的hash值
+- ino inode 数量
+- len 文件名长度
+- type 文件类型，例如： 文件夹，符号链接等
+
+一个文件夹entry块包括214个插槽和文件名。其中，位图用于表示每个dentry是否有效。一个占据4k的dentry块有以下组成部分：
+```
+  Dentry Block(4 K) = bitmap (27 bytes) + reserved (3 bytes) +
+	              dentries(11 * 214 bytes) + file name (8 * 214 bytes)
+
+                         [Bucket]
+             +--------------------------------+
+             |dentry block 1 | dentry block 2 |
+             +--------------------------------+
+             .               .
+       .                             .
+  .       [Dentry Block Structure: 4KB]       .
+  +--------+----------+----------+------------+
+  | bitmap | reserved | dentries | file names |
+  +--------+----------+----------+------------+
+  [Dentry Block: 4KB] .   .
+		 .               .
+            .                          .
+            +------+------+-----+------+
+            | hash | ino  | len | type |
+            +------+------+-----+------+
+            [Dentry Structure: 11 bytes]
+```
+
+F2FS为目录结构实现了多级别hash表。
+```
+----------------------
+A : bucket
+B : block
+N : MAX_DIR_HASH_DEPTH
+----------------------
+
+level #0   | A(2B)
+           |
+level #1   | A(2B) - A(2B)
+           |
+level #2   | A(2B) - A(2B) - A(2B) - A(2B)
+     .     |   .       .       .       .
+level #N/2 | A(2B) - A(2B) - A(2B) - A(2B) - A(2B) - ... - A(2B)
+     .     |   .       .       .       .
+level #N   | A(4B) - A(4B) - A(4B) - A(4B) - A(4B) - ... - A(4B)
+
+block和bucket的数量取决于,
+
+                            ,- 2, if n < MAX_DIR_HASH_DEPTH / 2,
+  # of blocks in level #n = |
+                            `- 4, Otherwise
+
+                             ,- 2^(n + dir_level),
+			     |        if n + dir_level < MAX_DIR_HASH_DEPTH / 2,
+  # of buckets in level #n = |
+                             `- 2^((MAX_DIR_HASH_DEPTH / 2) - 1),
+			              Otherwise
+```
+当F2FS在目录中找到文件名时，首先会计算该文件名的哈希值。 然后，F2FS扫描级别0的哈希表，以查找由文件名及其索引节点号组成的dentry。 如果未找到，F2FS将扫描级别1的下一个哈希表。 通过这种方式，F2FS从1到N递增地扫描每个级别中的哈希表。在每个级别中，F2FS仅需要扫描由以下等式确定的一个存储桶，这显示了O（log（file＃））复杂性。
+
+要在级别扫描的存储桶编号#n = (hash value) % (# of buckets in level #n)
+
+在创建文件的情况下，F2FS查找覆盖文件名的连续的空插槽。 F2FS以与查找操作相同的方式搜索从1到N的整个级别的哈希表中的空插槽。
+
+下图显示了两个带孩子的案件的例子：
+```
+       --------------> Dir <--------------
+       |                                 |
+    child                             child
+
+    child - child                     [hole] - child
+
+    child - child - child             [hole] - [hole] - child
+
+   Case 1:                           Case 2:
+   Number of children = 6,           Number of children = 3,
+   File size = 7                     File size = 7
+```
+
+**Default Block Allocation**
+在运行时，在Main区域，F2FS管理者6个激活的logs： Hot/Warm/Cold node 和 Hot/Warm/Cold data.
+
+- Hot node	contains direct node blocks of directories.
+- Warm node	contains direct node blocks except hot node blocks.
+- Cold node	contains indirect node blocks
+- Hot data	contains dentry blocks
+- Warm data	contains data blocks except hot and cold data blocks
+- Cold data	contains multimedia data or migrated data blocks
+
+LFS有两个策略针对空闲空间的管理：threaded log 和 copy-and-compac-tion.复制和压缩方案（称为清理）非常适合于显示出非常好的顺序写入性能的设备，因为空闲时间段一直用于写入新数据。 然而，它在高利用率下遭受清洁开销的困扰。 相反，线程日志方案遭受随机写操作，但是不需要清理过程。 F2FS采用一种混合方案，默认情况下采用复制和压缩方案，但是该策略会根据文件系统状态动态更改为线程日志方案。
+
+为了使F2FS与基础的基于闪存的存储保持一致，F2FS以段为单位分配一个段。 F2FS期望节的大小将与FTL中垃圾回收的单位大小相同。 此外，关于FTL中的映射粒度，由于FTL可以根据其映射粒度将活动日志中的数据写入一个分配单元，因此F2FS尽可能多地分配来自不同区域的活动日志的每个部分。
+
+**Cleaning process**
+F2FS确实可以按需和在后台进行清理。 当没有足够的空闲段来服务VFS呼叫时，将触发按需清洁。 后台清理程序由内核线程操作，并在系统空闲时触发清理作业。
+
+F2FS支持两种受害者选择策略：贪婪算法和成本收益算法。在贪婪算法中，F2FS选择有效块数量最少的受害者段。 在成本效益算法中，F2FS根据分段寿命和有效块数选择一个受害分段，以解决贪婪算法中的日志块跳动问题。 F2FS对按需清洁器采用贪婪算法，而背景清洁器采用成本效益算法。
+
+为了识别受害段中的数据是否有效，F2FS管理一个位图。 每个位代表一个块的有效性，位图由覆盖主区域中整个块的位流组成。
